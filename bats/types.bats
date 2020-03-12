@@ -316,7 +316,6 @@ SQL
 }
 
 @test "types: ENUM('a','b','c')" {
-    skip "This is not yet persisted in dolt"
     dolt sql <<SQL
 CREATE TABLE test (
   pk BIGINT NOT NULL COMMENT 'tag:0',
@@ -597,7 +596,6 @@ SQL
 }
 
 @test "types: SET('a','b','c')" {
-    skip "This is not yet persisted in dolt"
     dolt sql <<SQL
 CREATE TABLE test (
   pk BIGINT NOT NULL COMMENT 'tag:0',
@@ -695,7 +693,6 @@ SQL
 }
 
 @test "types: TIME" {
-    skip "This is not yet persisted in dolt"
     dolt sql <<SQL
 CREATE TABLE test (
   pk BIGINT NOT NULL COMMENT 'tag:0',
