@@ -32,7 +32,7 @@ import (
 // Executes all the SQL non-select statements given in the string against the root value given and returns the updated
 // root, or an error. Statements in the input string are split by `;\n`
 func ExecuteSql(dEnv *env.DoltEnv, root *doltdb.RootValue, statements string) (*doltdb.RootValue, error) {
-	db := NewBatchedDatabase("dolt", root, dEnv.DoltDB, dEnv.RepoState)
+	db := NewBatchedDatabase("dolt", dEnv.DoltDB, dEnv.RepoState, dEnv.RepoStateWriter())
 	engine, ctx, err := NewTestEngine(context.Background(), db, root)
 
 	if err != nil {
@@ -88,12 +88,14 @@ func ExecuteSql(dEnv *env.DoltEnv, root *doltdb.RootValue, statements string) (*
 
 // NewTestSQLCtx returns a new *sql.Context with a default DoltSession, a new IndexRegistry, and a new ViewRegistry
 func NewTestSQLCtx(ctx context.Context) *sql.Context {
-	return sql.NewContext(
+	sqlCtx := sql.NewContext(
 		ctx,
 		sql.WithSession(DefaultDoltSession()),
 		sql.WithIndexRegistry(sql.NewIndexRegistry()),
 		sql.WithViewRegistry(sql.NewViewRegistry()),
-	)
+	).WithCurrentDB("dolt")
+
+	return sqlCtx
 }
 
 // NewTestEngine creates a new default engine, and a *sql.Context and initializes indexes and schema fragments.
@@ -102,6 +104,8 @@ func NewTestEngine(ctx context.Context, db Database, root *doltdb.RootValue) (*s
 	engine.AddDatabase(db)
 
 	sqlCtx := NewTestSQLCtx(ctx)
+	DSessFromSess(sqlCtx.Session).AddDB(ctx, db)
+	sqlCtx.SetCurrentDatabase(db.Name())
 	err := db.SetRoot(sqlCtx, root)
 
 	if err != nil {
@@ -126,8 +130,8 @@ func NewTestEngine(ctx context.Context, db Database, root *doltdb.RootValue) (*s
 
 // Executes the select statement given and returns the resulting rows, or an error if one is encountered.
 // This uses the index functionality, which is not ready for prime time. Use with caution.
-func ExecuteSelect(ddb *doltdb.DoltDB, root *doltdb.RootValue, query string) ([]sql.Row, error) {
-	db := NewDatabase("dolt", root, ddb, nil)
+func ExecuteSelect(dEnv *env.DoltEnv, ddb *doltdb.DoltDB, root *doltdb.RootValue, query string) ([]sql.Row, error) {
+	db := NewDatabase("dolt", ddb, dEnv.RepoState, dEnv.RepoStateWriter())
 	engine, ctx, err := NewTestEngine(context.Background(), db, root)
 	if err != nil {
 		return nil, err

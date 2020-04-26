@@ -36,11 +36,12 @@ import (
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
 	"github.com/liquidata-inc/dolt/go/libraries/events"
+	"github.com/liquidata-inc/dolt/go/libraries/utils/argparser"
 	"github.com/liquidata-inc/dolt/go/libraries/utils/filesys"
 )
 
 const (
-	Version = "0.15.1"
+	Version = "0.16.1"
 )
 
 var dumpDocsCommand = &commands.DumpDocsCmd{}
@@ -50,8 +51,8 @@ var doltCommand = cli.NewSubCommandHandler("dolt", "it's git for data", []cli.Co
 	commands.AddCmd{},
 	commands.ResetCmd{},
 	commands.CommitCmd{},
-	commands.SqlCmd{},
-	sqlserver.SqlServerCmd{},
+	commands.SqlCmd{VersionStr: Version},
+	sqlserver.SqlServerCmd{VersionStr: Version},
 	commands.LogCmd{},
 	commands.DiffCmd{},
 	commands.BlameCmd{},
@@ -78,6 +79,7 @@ var doltCommand = cli.NewSubCommandHandler("dolt", "it's git for data", []cli.Co
 
 func init() {
 	dumpDocsCommand.DoltCommand = doltCommand
+	sqlserver.CliVersion = Version
 }
 
 const chdirFlag = "--chdir"
@@ -207,6 +209,13 @@ func commandNeedsMigrationCheck(args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
+
+	// special case for -h, --help
+	_, err := argparser.NewArgParser().Parse(args)
+	if err == argparser.ErrHelp {
+		return false
+	}
+
 	subCommandStr := strings.ToLower(strings.TrimSpace(args[0]))
 	for _, cmd := range []cli.Command{
 		commands.ResetCmd{},

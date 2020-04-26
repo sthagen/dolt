@@ -54,7 +54,7 @@ teardown() {
     [[ "$output" =~ "\`pk\` BIGINT" ]] || false
     [[ "$output" =~ "\`int\` BIGINT" ]] || false
     [[ "$output" =~ "\`string\` LONGTEXT" ]] || false
-    [[ "$output" =~ "\`boolean\` BIGINT" ]] || false
+    [[ "$output" =~ "\`boolean\` BIT(1)" ]] || false
     [[ "$output" =~ "\`float\` DOUBLE" ]] || false
     [[ "$output" =~ "\`uint\` BIGINT" ]] || false
     [[ "$output" =~ "\`uuid\` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin" ]] || false
@@ -77,7 +77,7 @@ teardown() {
     [[ "$output" =~ "\`pk\` BIGINT" ]] || false
     [[ "$output" =~ "\`int\` BIGINT" ]] || false
     [[ "$output" =~ "\`string\` LONGTEXT" ]] || false
-    [[ "$output" =~ "\`boolean\` BIGINT" ]] || false
+    [[ "$output" =~ "\`boolean\` BIT(1)" ]] || false
     [[ "$output" =~ "\`float\` DOUBLE" ]] || false
     [[ "$output" =~ "\`uint\` BIGINT" ]] || false
     [[ "$output" =~ "\`uuid\` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin" ]] || false
@@ -148,7 +148,7 @@ teardown() {
 }
 
 @test "schema import with strings in csv" {
-    # This CSV has queoted integers for the primary key ie "0","foo",... and
+    # This CSV has quoted integers for the primary key ie "0","foo",... and
     # "1","bar",...
     run dolt schema import -r --keep-types --pks=pk test `batshelper 1pk5col-strings.csv`
     [ "$status" -eq 0 ]
@@ -162,4 +162,19 @@ teardown() {
     [[ "$output" =~ "\`c5\` LONGTEXT" ]] || false
     [[ "$output" =~ "\`c6\` LONGTEXT" ]] || false
     [[ "$output" =~ "PRIMARY KEY (\`pk\`)" ]] || false
+}
+
+@test "schema import supports dates andf times" {
+    run dolt schema import -c --pks=pk test `batshelper 1pk-datetime.csv`
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 6 ]
+    skip "schema import does not support datetime"
+    [[ "$output" =~ "DATETIME" ]] || false;
+}
+
+@test "schema import of two tables" {
+    dolt schema import -c --pks=pk test1 `batshelper 1pksupportedtypes.csv`
+    skip "Guaranteed tag collision right now"
+    dolt schema import -c --pks=pk test2 `batshelper 1pk-datetime.csv`
+    
 }

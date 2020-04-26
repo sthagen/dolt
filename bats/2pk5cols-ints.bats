@@ -22,9 +22,6 @@ teardown() {
 }
 
 @test "create a table with a schema file and examine repo" {
-    # Remove the docs, because they will show up in the diff below and break the lines[x] assertions.
-    rm LICENSE.md
-    rm README.md
     run dolt ls
     [ "$status" -eq 0 ]
     [[ "${lines[1]}" =~ "test" ]] || false
@@ -76,14 +73,14 @@ teardown() {
 @test "interact with a multiple primary key table with sql" {
     run dolt sql -q "insert into test (pk1,pk2,c1,c2,c3,c4,c5) values (0,0,6,6,6,6,6)"
     [ "$status" -eq 0 ]
-    [[ "$output" =~ "| 1       |" ]] || false
+    [[ "$output" =~ "Query OK, 1 row affected" ]] || false
     run dolt sql -q "select * from test"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "c5" ]] || false
     [[ "$output" =~ "6" ]] || false
     run dolt sql -q "insert into test (pk1,pk2,c1,c2,c3,c4,c5) values (0,1,7,7,7,7,7),(1,0,8,8,8,8,8)"
     [ "$status" -eq 0 ]
-    [[ "$output" =~ "| 2       |" ]] || false
+    [[ "$output" =~ "Query OK, 2 rows affected" ]] || false
     run dolt sql -q "select * from test"
     [ "$status" -eq 0 ]
     [[ "$output" =~ "c5" ]] || false

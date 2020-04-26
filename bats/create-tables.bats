@@ -451,6 +451,59 @@ SQL
     [ "$status" -eq 1 ]
 }
 
+@test "create a table with a SQL reserved word" {
+    dolt sql <<SQL
+CREATE TABLE test (
+    pk INT NOT NULL,
+    \`all\` INT,
+    \`select\` INT,
+    PRIMARY KEY (pk)
+);
+SQL
+    run dolt schema show
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "all" ]] || false
+    [[ "$output" =~ "select" ]] || false
+    run dolt sql <<SQL
+CREATE TABLE test (
+    pk INT NOT NULL,
+    all INT,
+    select INT,
+    PRIMARY KEY (pk)
+);
+SQL
+    [ "$status" -ne 0 ]
+}
+
+@test "create a table with a SQL keyword that is not reserved" {
+    dolt sql <<SQL
+CREATE TABLE test (
+    pk INT NOT NULL,
+    \`comment\` INT,
+    \`date\` INT,
+    PRIMARY KEY (pk)
+);
+SQL
+    run dolt schema show
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "comment" ]] || false
+    [[ "$output" =~ "date" ]] || false
+    run dolt sql <<SQL
+CREATE TABLE test (
+    pk INT NOT NULL,
+    comment INT,
+    date INT,
+    PRIMARY KEY (pk)
+);
+SQL
+    skip "Current SQL parser requires backticks around keywords, not just reserved words"
+    [ "$status" -eq 0 ]
+    run dolt schema show
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "comment" ]] || false
+    [[ "$output" =~ "date" ]] || false 
+}
+
 @test "import a table with non UTF-8 characters in it" {
     run dolt table import -c --pk=pk test `batshelper bad-characters.csv`
     skip "Dolt allows you to create tables with non-UTF-8 characters right now"
@@ -496,7 +549,7 @@ SQL
 }
 
 @test "create a table with null values from csv import with json file" {
-    run dolt table import -c -s `batshelper empty-strings-null-values.json` test `batshelper empty-strings-null-values.csv`
+    run dolt table import -c -s `batshelper empty-strings-null-values-sch.json` test `batshelper empty-strings-null-values.csv`
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Import completed successfully." ]] || false
     run dolt ls
@@ -512,4 +565,44 @@ SQL
     [ "${lines[7]}" = "| e  | row five  | <NULL>    |" ]
     [ "${lines[8]}" = "| f  | row six   | 6         |" ]
     [ "${lines[9]}" = "| g  | <NULL>    | <NULL>    |" ]
+}
+
+@test "create a table with null values from json import with json file" {
+    dolt sql <<SQL
+CREATE TABLE test (
+  pk LONGTEXT NOT NULL,
+  headerOne LONGTEXT,
+  headerTwo BIGINT,
+  PRIMARY KEY (pk)
+);
+SQL
+    run dolt table import -u test `batshelper empty-strings-null-values.json`
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Import completed successfully." ]] || false
+    run dolt ls
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "test" ]] || false
+    run dolt sql -q "select * from test"
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 11 ]
+    [ "${lines[3]}" = '| a  | ""        | 1         |' ]
+    [ "${lines[4]}" = '| b  |           | 2         |' ]
+    [ "${lines[5]}" = "| c  | <NULL>    | 3         |" ]
+    [ "${lines[6]}" = "| d  | row four  | <NULL>    |" ]
+    [ "${lines[7]}" = "| e  | row five  | <NULL>    |" ]
+    [ "${lines[8]}" = "| f  | row six   | 6         |" ]
+    [ "${lines[9]}" = "| g  | <NULL>    | <NULL>    |" ]
+}
+
+@test "fail to create a table with null values from json import with json file" {
+    dolt sql <<SQL
+CREATE TABLE test (
+  pk LONGTEXT NOT NULL,
+  headerOne LONGTEXT NOT NULL,
+  headerTwo BIGINT NOT NULL,
+  PRIMARY KEY (pk)
+);
+SQL
+    run dolt table import -u test `batshelper empty-strings-null-values.json`
+    [ "$status" -eq 1 ]
 }

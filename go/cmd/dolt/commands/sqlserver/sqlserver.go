@@ -28,13 +28,15 @@ import (
 )
 
 const (
-	hostFlag     = "host"
-	portFlag     = "port"
-	userFlag     = "user"
-	passwordFlag = "password"
-	timeoutFlag  = "timeout"
-	readonlyFlag = "readonly"
-	logLevelFlag = "loglevel"
+	hostFlag         = "host"
+	portFlag         = "port"
+	userFlag         = "user"
+	passwordFlag     = "password"
+	timeoutFlag      = "timeout"
+	readonlyFlag     = "readonly"
+	logLevelFlag     = "loglevel"
+	multiDBDirFlag   = "multi-db-dir"
+	noAutoCommitFlag = "no-auto-commit"
 )
 
 var sqlServerDocs = cli.CommandDocumentationContent{
@@ -44,11 +46,13 @@ var sqlServerDocs = cli.CommandDocumentationContent{
 Currently, only {{.EmphasisLeft}}SELECT{{.EmphasisRight}} statements are operational, as support for other statements is still being developed.
 `,
 	Synopsis: []string{
-		"[-H {{.LessThan}}host{{.GreaterThan}}] [-P {{.LessThan}}port{{.GreaterThan}}] [-u {{.LessThan}}user{{.GreaterThan}}] [-p {{.LessThan}}password{{.GreaterThan}}] [-t {{.LessThan}}timeout{{.GreaterThan}}] [-l {{.LessThan}}loglevel{{.GreaterThan}}] [-r]",
+		"[-H {{.LessThan}}host{{.GreaterThan}}] [-P {{.LessThan}}port{{.GreaterThan}}] [-u {{.LessThan}}user{{.GreaterThan}}] [-p {{.LessThan}}password{{.GreaterThan}}] [-t {{.LessThan}}timeout{{.GreaterThan}}] [-l {{.LessThan}}loglevel{{.GreaterThan}}] [--multi-db-dir {{.LessThan}}directory{{.GreaterThan}}] [-r]",
 	},
 }
 
-type SqlServerCmd struct{}
+type SqlServerCmd struct {
+	VersionStr string
+}
 
 // Name is returns the name of the Dolt cli command. This is what is used on the command line to invoke the command
 func (cmd SqlServerCmd) Name() string {
@@ -75,6 +79,8 @@ func createArgParser(serverConfig *ServerConfig) *argparser.ArgParser {
 	ap.SupportsInt(timeoutFlag, "t", "Connection timeout", fmt.Sprintf("Defines the timeout, in seconds, used for connections\nA value of `0` represents an infinite timeout (default `%v`)", serverConfig.Timeout))
 	ap.SupportsFlag(readonlyFlag, "r", "Disables modification of the database")
 	ap.SupportsString(logLevelFlag, "l", "Log level", fmt.Sprintf("Defines the level of logging provided\nOptions are: `debug`, `info`, `warning`, `error`, `fatal` (default `%v`)", serverConfig.LogLevel))
+	ap.SupportsString(multiDBDirFlag, "", "directory", "Defines a directory whose subdirectories should all be dolt data repositories accessible as independent databases.")
+	ap.SupportsFlag(noAutoCommitFlag, "", "When provided sessions will not automatically commit their changes to the working set. Anything not manually committed will be lost.")
 	return ap
 }
 
@@ -83,24 +89,28 @@ func (cmd SqlServerCmd) EventType() eventsapi.ClientEventType {
 	return eventsapi.ClientEventType_SQL_SERVER
 }
 
-// Exec executes the command
-func (cmd SqlServerCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
-	return SqlServerImpl(ctx, commandStr, args, dEnv, nil)
+// RequiresRepo indicates that this command does not have to be run from within a dolt data repository directory.
+// In this case it is because this command supports the multiDBDirFlag which can pass in a directory.  In the event that
+// that parameter is not provided there is additional error handling within this command to make sure that this was in
+// fact run from within a dolt data repository directory.
+func (cmd SqlServerCmd) RequiresRepo() bool {
+	return false
 }
 
-func SqlServerImpl(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv, serverController *ServerController) int {
+// Exec executes the command
+func (cmd SqlServerCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
+	return startServer(ctx, cmd.VersionStr, commandStr, args, dEnv, nil)
+}
+
+func startServer(ctx context.Context, versionStr, commandStr string, args []string, dEnv *env.DoltEnv, serverController *ServerController) int {
 	serverConfig := DefaultServerConfig()
+	serverConfig.Version = versionStr
 
 	ap := createArgParser(serverConfig)
-	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, sqlServerDocs, ap))
+	help, _ := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, sqlServerDocs, ap))
 
 	apr := cli.ParseArgs(ap, args, help)
 	args = apr.Args()
-
-	root, verr := commands.GetWorkingWithVErr(dEnv)
-	if verr != nil {
-		return commands.HandleVErrAndExitCode(verr, usage)
-	}
 
 	if host, ok := apr.GetValue(hostFlag); ok {
 		serverConfig.Host = host
@@ -123,10 +133,19 @@ func SqlServerImpl(ctx context.Context, commandStr string, args []string, dEnv *
 	if logLevel, ok := apr.GetValue(logLevelFlag); ok {
 		serverConfig.LogLevel = LogLevel(logLevel)
 	}
+	if multiDBDir, ok := apr.GetValue(multiDBDirFlag); ok {
+		serverConfig.MultiDBDir = multiDBDir
+	} else {
+		if !cli.CheckEnvIsValid(dEnv) {
+			return 2
+		}
+	}
 
-	cli.PrintErrf("Starting server on port %d.", serverConfig.Port)
+	serverConfig.AutoCommit = !apr.Contains(noAutoCommitFlag)
 
-	if startError, closeError := Serve(ctx, serverConfig, root, serverController, dEnv); startError != nil || closeError != nil {
+	cli.PrintErrf("Starting server with Config %v", serverConfig.String())
+
+	if startError, closeError := Serve(ctx, serverConfig, serverController, dEnv); startError != nil || closeError != nil {
 		if startError != nil {
 			cli.PrintErrln(startError)
 		}

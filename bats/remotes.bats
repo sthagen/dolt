@@ -57,6 +57,15 @@ teardown() {
     [[ "$output" =~ "unknown remote" ]] || false
 }
 
+@test "push with only one argument" {
+    dolt remote add test-remote http://localhost:50051/test-org/test-repo
+    run dolt push test-remote
+    [ "$status" -eq 1 ]
+    skip "Bad error message for only one command to push"
+    [[ !"$output" =~ "unable to find" ]] || false
+    [[ "$output" =~ "must specify remote and branch" ]] || false
+}
+
 @test "push and pull master branch from a remote" {
     dolt remote add test-remote http://localhost:50051/test-org/test-repo
     run dolt push test-remote master
@@ -115,6 +124,7 @@ teardown() {
     dolt push test-remote master
 
     cd dolt-repo-clones/test-repo
+    echo "this text should remain after pull :p" > README.md
     run dolt pull
     [[ "$output" =~ "Updating" ]] || false
     run dolt log
@@ -125,7 +135,7 @@ teardown() {
     [[ "$output" =~ "updated-license" ]] || false
     run cat README.md
     [ "$status" -eq 0 ]
-    [[ "$output" =~ "readme-text" ]] || false
+    [[ "$output" =~ "this text should remain after pull :p" ]] || false
 }
 
 @test "clone a remote" {
@@ -200,8 +210,8 @@ SQL
     run dolt status
     [ "$status" -eq 0 ]
     run ls
-    [[ "$output" =~ "LICENSE.md" ]] || false
-    [[ "$output" =~ "README.md" ]] || false
+    [[ ! "$output" =~ "LICENSE.md" ]] || false
+    [[ ! "$output" =~ "README.md" ]] || false
     run dolt remote -v
     [ "$status" -eq 0 ]
     [[ "$output" =~ "origin" ]] || false
@@ -477,12 +487,12 @@ SQL
     cd "dolt-repo-clones/test-repo"
     dolt sql <<SQL
 CREATE TABLE test2 (
-  pk BIGINT NOT NULL COMMENT 'tag:0',
-  c1 BIGINT COMMENT 'tag:1',
-  c2 BIGINT COMMENT 'tag:2',
-  c3 BIGINT COMMENT 'tag:3',
-  c4 BIGINT COMMENT 'tag:4',
-  c5 BIGINT COMMENT 'tag:5',
+  pk BIGINT NOT NULL COMMENT 'tag:10',
+  c1 BIGINT COMMENT 'tag:11',
+  c2 BIGINT COMMENT 'tag:12',
+  c3 BIGINT COMMENT 'tag:13',
+  c4 BIGINT COMMENT 'tag:14',
+  c5 BIGINT COMMENT 'tag:15',
   PRIMARY KEY (pk)
 );
 SQL
@@ -606,4 +616,99 @@ SQL
     [[ "$output" =~ "error: Your local changes to the following tables would be overwritten by merge:" ]] || false
     [[ "$output" =~ "test" ]] || false
     [[ "$output" =~ "Please commit your changes before you merge." ]] || false
+}
+
+@test "force push to master" {
+    dolt remote add test-remote http://localhost:50051/test-org/test-repo
+    dolt push test-remote master
+
+    cd "dolt-repo-clones"
+    dolt clone http://localhost:50051/test-org/test-repo
+    cd ..
+
+    dolt sql <<SQL
+CREATE TABLE test (
+  pk BIGINT NOT NULL COMMENT 'tag:0',
+  c1 BIGINT COMMENT 'tag:1',
+  c2 BIGINT COMMENT 'tag:2',
+  c3 BIGINT COMMENT 'tag:3',
+  c4 BIGINT COMMENT 'tag:4',
+  c5 BIGINT COMMENT 'tag:5',
+  PRIMARY KEY (pk)
+);
+SQL
+    dolt add test
+    dolt commit -m "test commit"
+    dolt push test-remote master
+    cd "dolt-repo-clones/test-repo"
+    dolt sql <<SQL
+CREATE TABLE other (
+  pk BIGINT NOT NULL COMMENT 'tag:0',
+  c1 BIGINT COMMENT 'tag:1',
+  c2 BIGINT COMMENT 'tag:2',
+  c3 BIGINT COMMENT 'tag:3',
+  c4 BIGINT COMMENT 'tag:4',
+  c5 BIGINT COMMENT 'tag:5',
+  PRIMARY KEY (pk)
+);
+SQL
+    dolt add other
+    dolt commit -m "added other table"
+    dolt fetch
+    run dolt push origin master
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "tip of your current branch is behind" ]] || false
+    dolt push -f master
+    run dolt push -f origin master
+    [ "$status" -eq 0 ]
+}
+
+
+@test "force fetch from master" {
+    dolt remote add test-remote http://localhost:50051/test-org/test-repo
+    dolt push test-remote master
+
+    cd "dolt-repo-clones"
+    dolt clone http://localhost:50051/test-org/test-repo
+    cd ..
+
+    dolt sql <<SQL
+CREATE TABLE test (
+  pk BIGINT NOT NULL COMMENT 'tag:0',
+  c1 BIGINT COMMENT 'tag:1',
+  c2 BIGINT COMMENT 'tag:2',
+  c3 BIGINT COMMENT 'tag:3',
+  c4 BIGINT COMMENT 'tag:4',
+  c5 BIGINT COMMENT 'tag:5',
+  PRIMARY KEY (pk)
+);
+SQL
+    dolt add test
+    dolt commit -m "test commit"
+    dolt push test-remote master
+    cd "dolt-repo-clones/test-repo"
+    dolt sql <<SQL
+CREATE TABLE other (
+  pk BIGINT NOT NULL COMMENT 'tag:10',
+  c1 BIGINT COMMENT 'tag:11',
+  c2 BIGINT COMMENT 'tag:12',
+  c3 BIGINT COMMENT 'tag:13',
+  c4 BIGINT COMMENT 'tag:14',
+  c5 BIGINT COMMENT 'tag:15',
+  PRIMARY KEY (pk)
+);
+SQL
+    dolt add other
+    dolt commit -m "added other table"
+    dolt fetch
+    dolt push -f origin master
+    cd ../../
+    run dolt fetch test-remote
+    [ "$status" -ne 0 ]
+    run dolt pull
+    [ "$status" -ne 0 ]
+    run dolt fetch -f test-remote
+    [ "$status" -eq 0 ]
+    dolt pull
+    [ "$status" -eq 0 ]
 }

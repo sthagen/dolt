@@ -41,6 +41,10 @@ var _ logictest.Harness = &DoltHarness{}
 type DoltHarness struct {
 	Version string
 	engine  *sqle.Engine
+
+	sess    *dsql.DoltSession
+	idxReg  *sql.IndexRegistry
+	viewReg *sql.ViewRegistry
 }
 
 func (h *DoltHarness) EngineStr() string {
@@ -53,52 +57,16 @@ func (h *DoltHarness) Init() error {
 		panic("Current directory must be a valid dolt repository")
 	}
 
-	root, verr := commands.GetWorkingWithVErr(dEnv)
-	if verr != nil {
-		return verr
-	}
-
-	root = resetEnv(root)
-
-	var err error
-	h.engine, err = sqlNewEngine(dEnv.DoltDB, root)
-
-	return err
+	return innerInit(h, dEnv)
 }
 
 func (h *DoltHarness) ExecuteStatement(statement string) error {
-	idxReg := sql.NewIndexRegistry()
-	viewReg := sql.NewViewRegistry()
 	ctx := sql.NewContext(
 		context.Background(),
-		sql.WithSession(dsql.DefaultDoltSession()),
 		sql.WithPid(rand.Uint64()),
-		sql.WithIndexRegistry(idxReg),
-		sql.WithViewRegistry(viewReg))
-
-	for _, db := range h.engine.Catalog.AllDatabases() {
-		dsqlDB := db.(dsql.Database)
-		defRoot := dsqlDB.GetDefaultRoot()
-
-		err := dsqlDB.SetRoot(ctx, defRoot)
-
-		if err != nil {
-			return err
-		}
-
-		idxReg.RegisterIndexDriver(dsql.NewDoltIndexDriver(dsqlDB))
-		err = dsql.RegisterSchemaFragments(ctx, dsqlDB, defRoot)
-
-		if err != nil {
-			return err
-		}
-	}
-
-	err := idxReg.LoadIndexes(ctx, h.engine.Catalog.AllDatabases())
-
-	if err != nil {
-		return err
-	}
+		sql.WithIndexRegistry(h.idxReg),
+		sql.WithViewRegistry(h.viewReg),
+		sql.WithSession(h.sess))
 
 	statement = normalizeStatement(statement)
 
@@ -108,6 +76,106 @@ func (h *DoltHarness) ExecuteStatement(statement string) error {
 	}
 
 	return drainIterator(rowIter)
+}
+
+func (h *DoltHarness) ExecuteQuery(statement string) (schema string, results []string, err error) {
+	pid := rand.Uint32()
+	ctx := sql.NewContext(
+		context.Background(),
+		sql.WithPid(uint64(pid)),
+		sql.WithIndexRegistry(h.idxReg),
+		sql.WithViewRegistry(h.viewReg),
+		sql.WithSession(h.sess))
+
+	var sch sql.Schema
+	var rowIter sql.RowIter
+	defer func() {
+		if r := recover(); r != nil {
+			// Panics leave the engine in a bad state that we have to clean up
+			h.engine.Catalog.ProcessList.Kill(pid)
+			panic(r)
+		}
+	}()
+
+	sch, rowIter, err = h.engine.Query(ctx, statement)
+	if err != nil {
+		return "", nil, err
+	}
+
+	schemaString, err := schemaToSchemaString(sch)
+	if err != nil {
+		return "", nil, err
+	}
+
+	results, err = rowsToResultStrings(rowIter)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return schemaString, results, nil
+}
+
+func innerInit(h *DoltHarness, dEnv *env.DoltEnv) error {
+	var err error
+	h.engine, err = sqlNewEngine(dEnv)
+
+	if err != nil {
+		return err
+	}
+
+	h.sess = dsql.DefaultDoltSession()
+	h.idxReg = sql.NewIndexRegistry()
+	h.viewReg = sql.NewViewRegistry()
+
+	ctx := sql.NewContext(
+		context.Background(),
+		sql.WithIndexRegistry(h.idxReg),
+		sql.WithViewRegistry(h.viewReg),
+		sql.WithSession(h.sess))
+
+	dbs := h.engine.Catalog.AllDatabases()
+	dsqlDBs := make([]dsql.Database, len(dbs))
+	for i, db := range dbs {
+		dsqlDB := db.(dsql.Database)
+		dsqlDBs[i] = dsqlDB
+
+		sess := dsql.DSessFromSess(ctx.Session)
+		err := sess.AddDB(ctx, dsqlDB)
+
+		if err != nil {
+			return err
+		}
+
+		root, verr := commands.GetWorkingWithVErr(dEnv)
+		if verr != nil {
+			return verr
+		}
+
+		err = dsqlDB.SetRoot(ctx, root)
+
+		if err != nil {
+			return err
+		}
+
+		err = dsql.RegisterSchemaFragments(ctx, dsqlDB, root)
+
+		if err != nil {
+			return err
+		}
+	}
+
+	ctx.RegisterIndexDriver(dsql.NewDoltIndexDriver(dsqlDBs...))
+	err = ctx.LoadIndexes(ctx, h.engine.Catalog.AllDatabases())
+
+	if len(dbs) == 1 {
+		h.sess.SetCurrentDatabase(dbs[0].Name())
+	}
+
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // We cheat a little at these tests. A great many of them use tables without primary keys, which we don't currently
@@ -139,54 +207,6 @@ func normalizeStatement(statement string) string {
 	}
 	normalized += "))"
 	return normalized
-}
-
-func (h *DoltHarness) ExecuteQuery(statement string) (schema string, results []string, err error) {
-	idxReg := sql.NewIndexRegistry()
-	viewReg := sql.NewViewRegistry()
-	pid := rand.Uint32()
-	ctx := sql.NewContext(
-		context.Background(),
-		sql.WithPid(uint64(pid)),
-		sql.WithIndexRegistry(idxReg),
-		sql.WithViewRegistry(viewReg))
-
-	for _, db := range h.engine.Catalog.AllDatabases() {
-		dsqlDB := db.(dsql.Database)
-
-		err := dsqlDB.SetRoot(ctx, dsqlDB.GetDefaultRoot())
-
-		if err != nil {
-			return "", nil, err
-		}
-	}
-
-	var sch sql.Schema
-	var rowIter sql.RowIter
-	defer func() {
-		if r := recover(); r != nil {
-			// Panics leave the engine in a bad state that we have to clean up
-			h.engine.Catalog.ProcessList.Kill(pid)
-			panic(r)
-		}
-	}()
-
-	sch, rowIter, err = h.engine.Query(ctx, statement)
-	if err != nil {
-		return "", nil, err
-	}
-
-	schemaString, err := schemaToSchemaString(sch)
-	if err != nil {
-		return "", nil, err
-	}
-
-	results, err = rowsToResultStrings(rowIter)
-	if err != nil {
-		return "", nil, err
-	}
-
-	return schemaString, results, nil
 }
 
 func drainIterator(iter sql.RowIter) error {
@@ -318,8 +338,8 @@ func resetEnv(root *doltdb.RootValue) *doltdb.RootValue {
 	return newRoot
 }
 
-func sqlNewEngine(ddb *doltdb.DoltDB, root *doltdb.RootValue) (*sqle.Engine, error) {
-	db := dsql.NewDatabase("dolt", root, ddb, nil)
+func sqlNewEngine(dEnv *env.DoltEnv) (*sqle.Engine, error) {
+	db := dsql.NewDatabase("dolt", dEnv.DoltDB, dEnv.RepoState, dEnv.RepoStateWriter())
 	engine := sqle.NewDefault()
 	engine.AddDatabase(db)
 

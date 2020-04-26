@@ -213,12 +213,27 @@ NOT_VALID_REPO_ERROR="The current directory is not a valid dolt repository."
     cd dolt-repo-$$-new
     run dolt init
     [ "$status" -eq 0 ]
-    [ "$output" = "Successfully initialized dolt data repository." ]
+    [[ "$output" =~ "Successfully initialized dolt data repository." ]] || false
     [ -d .dolt ]
     [ -d .dolt/noms ]
     [ -f .dolt/config.json ]
     [ -f .dolt/repo_state.json ]
-    [ -f README.md ]
-    [ -f LICENSE.md ]
+    [ ! -f README.md ]
+    [ ! -f LICENSE.md ]
     rm -rf $BATS_TMPDIR/dolt-repo-$$-new
+}
+
+@test "dolt init should not stomp existing LICENSE.md and README.md" {
+    echo "greatest README ever" > README.md
+    echo "greatest LICENSE ever" > LICENSE.md
+    dolt init
+    grep "greatest README ever" README.md
+    grep "greatest LICENSE ever" LICENSE.md
+}
+
+@test "all versions of help work outside a repository" {
+    dolt checkout --help
+    dolt checkout -help
+    run dolt checkout help
+    [ "$status" -ne 0 ]
 }

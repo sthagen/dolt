@@ -24,7 +24,6 @@ import (
 	"github.com/src-d/go-mysql-server/sql/expression"
 
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/rowconv"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle/expreval"
@@ -59,11 +58,19 @@ type HistoryTable struct {
 	commitFilters         []sql.Expression
 	rowFilters            []sql.Expression
 	cmItr                 doltdb.CommitItr
+	indCmItr              *doltdb.CommitIndexingCommitItr
 	readerCreateFuncCache map[hash.Hash]CreateReaderFunc
 }
 
 // NewHistoryTable creates a history table
-func NewHistoryTable(ctx context.Context, name string, ddb *doltdb.DoltDB, rsr env.RepoStateReader) (*HistoryTable, error) {
+func NewHistoryTable(ctx *sql.Context, dbName, tblName string) (*HistoryTable, error) {
+	sess := DSessFromSess(ctx.Session)
+	ddb, ok := sess.GetDoltDB(dbName)
+
+	if !ok {
+		return nil, sql.ErrDatabaseNotFound.New(dbName)
+	}
+
 	cmItr, err := doltdb.CommitItrForAllBranches(ctx, ddb)
 
 	if err != nil {
@@ -72,7 +79,13 @@ func NewHistoryTable(ctx context.Context, name string, ddb *doltdb.DoltDB, rsr e
 
 	indCmItr := doltdb.NewCommitIndexingCommitItr(ddb, cmItr)
 
-	ss, err := SuperSchemaForAllBranches(ctx, indCmItr, ddb, rsr, name)
+	root, ok := sess.GetRoot(dbName)
+
+	if !ok {
+		return nil, sql.ErrDatabaseNotFound.New(dbName)
+	}
+
+	ss, err := SuperSchemaForAllBranches(ctx, indCmItr, root, tblName)
 
 	if err != nil {
 		return nil, err
@@ -89,10 +102,10 @@ func NewHistoryTable(ctx context.Context, name string, ddb *doltdb.DoltDB, rsr e
 	}
 
 	if sch.GetAllCols().Size() <= 3 {
-		return nil, sql.ErrTableNotFound.New(DoltHistoryTablePrefix + name)
+		return nil, sql.ErrTableNotFound.New(DoltHistoryTablePrefix + tblName)
 	}
 
-	tableName := DoltHistoryTablePrefix + name
+	tableName := DoltHistoryTablePrefix + tblName
 	sqlSch, err := doltSchemaToSqlSchema(tableName, sch)
 
 	if err != nil {
@@ -100,11 +113,12 @@ func NewHistoryTable(ctx context.Context, name string, ddb *doltdb.DoltDB, rsr e
 	}
 
 	return &HistoryTable{
-		name:                  name,
+		name:                  tblName,
 		ddb:                   ddb,
 		ss:                    ss,
 		sqlSch:                sqlSch,
-		cmItr:                 indCmItr,
+		cmItr:                 indCmItr.Unfiltered(),
+		indCmItr:              indCmItr,
 		readerCreateFuncCache: make(map[hash.Hash]CreateReaderFunc),
 	}, nil
 }
@@ -126,8 +140,6 @@ func (ht *HistoryTable) WithFilters(filters []sql.Expression) sql.Table {
 		ht.commitFilters, ht.rowFilters = splitFilters(filters)
 	}
 
-	indCmItr := ht.cmItr.(*doltdb.CommitIndexingCommitItr)
-
 	if len(ht.commitFilters) > 0 {
 		ctx := context.TODO()
 		commitCheck, err := getCommitFilterFunc(ht.ddb.Format(), ht.commitFilters)
@@ -137,14 +149,12 @@ func (ht *HistoryTable) WithFilters(filters []sql.Expression) sql.Table {
 			panic(err)
 		}
 
-		ht.cmItr, err = indCmItr.Filter(ctx, commitCheck)
+		ht.cmItr, err = ht.indCmItr.Filter(ctx, commitCheck)
 
 		// TODO: fix panic
 		if err != nil {
 			panic(err)
 		}
-	} else {
-		ht.cmItr = indCmItr.Unfiltered()
 	}
 
 	return ht
