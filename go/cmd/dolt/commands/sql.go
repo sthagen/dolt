@@ -25,9 +25,9 @@ import (
 	"github.com/abiosoft/readline"
 	"github.com/fatih/color"
 	"github.com/flynn-archive/go-shlex"
+	sqle "github.com/liquidata-inc/go-mysql-server"
+	"github.com/liquidata-inc/go-mysql-server/sql"
 	"github.com/liquidata-inc/ishell"
-	sqle "github.com/src-d/go-mysql-server"
-	"github.com/src-d/go-mysql-server/sql"
 	"gopkg.in/src-d/go-errors.v1"
 	"vitess.io/vitess/go/vt/sqlparser"
 	"vitess.io/vitess/go/vt/vterrors"
@@ -39,7 +39,6 @@ import (
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
-	dsql "github.com/liquidata-inc/dolt/go/libraries/doltcore/sql"
 	dsqle "github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle"
 	_ "github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle/dfunctions"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/table"
@@ -713,7 +712,7 @@ func newCompleter(ctx context.Context, dEnv *env.DoltEnv) (*sqlCompleter, error)
 		}
 	}
 
-	completionWords = append(completionWords, dsql.CommonKeywords...)
+	completionWords = append(completionWords, dsqle.CommonKeywords...)
 
 	return &sqlCompleter{
 		allWords:    completionWords,

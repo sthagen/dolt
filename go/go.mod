@@ -43,6 +43,7 @@ require (
 	github.com/kch42/buzhash v0.0.0-20160816060738-9bdec3dec7c6
 	github.com/kr/pretty v0.2.0 // indirect
 	github.com/liquidata-inc/dolt/go/gen/proto/dolt/services/eventsapi v0.0.0-20200320155049-a8e482faeffd
+	github.com/liquidata-inc/go-mysql-server v0.5.1-0.20200430182534-22ee3768a0d0
 	github.com/liquidata-inc/ishell v0.0.0-20190514193646-693241f1f2a0
 	github.com/liquidata-inc/mmap-go v1.0.3
 	github.com/liquidata-inc/sqllogictest/go v0.0.0-20200320151923-b11801f10e15
@@ -64,7 +65,6 @@ require (
 	github.com/spf13/cast v1.3.1 // indirect
 	github.com/spf13/cobra v0.0.6
 	github.com/spf13/pflag v1.0.5 // indirect
-	github.com/src-d/go-mysql-server v0.6.0
 	github.com/stretchr/testify v1.5.1
 	github.com/tealeg/xlsx v1.0.5
 	github.com/tidwall/pretty v1.0.1 // indirect
@@ -79,7 +79,7 @@ require (
 	google.golang.org/grpc v1.28.0
 	gopkg.in/square/go-jose.v2 v2.4.1
 	gopkg.in/src-d/go-errors.v1 v1.0.0
-	gopkg.in/yaml.v2 v2.2.8 // indirect
+	gopkg.in/yaml.v2 v2.2.8
 	modernc.org/mathutil v1.1.0 // indirect
 	modernc.org/strutil v1.1.0 // indirect
 	vitess.io/vitess v3.0.0-rc.3.0.20190602171040-12bfde34629c+incompatible
@@ -87,8 +87,8 @@ require (
 
 replace github.com/liquidata-inc/dolt/go/gen/proto/dolt/services/eventsapi => ./gen/proto/dolt/services/eventsapi
 
-replace github.com/src-d/go-mysql-server => github.com/liquidata-inc/go-mysql-server v0.5.1-0.20200421001031-afa5b3530217
+replace vitess.io/vitess => github.com/liquidata-inc/vitess v0.0.0-20200430040751-192bb76ecd8b
 
-replace vitess.io/vitess => github.com/liquidata-inc/vitess v0.0.0-20200413233505-a88cc54bd1ee
+// replace vitess.io/vitess => ../../vitess
 
 go 1.13

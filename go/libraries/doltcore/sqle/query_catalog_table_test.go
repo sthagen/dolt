@@ -18,18 +18,18 @@ import (
 	"context"
 	"testing"
 
-	"github.com/src-d/go-mysql-server/sql"
+	"github.com/liquidata-inc/go-mysql-server/sql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/dtestutils"
-	. "github.com/liquidata-inc/dolt/go/libraries/doltcore/sql/sqltestutil"
+	"github.com/liquidata-inc/dolt/go/libraries/doltcore/sql/sqltestutil"
 )
 
 func TestInsertIntoQueryCatalogTable(t *testing.T) {
 	dEnv := dtestutils.CreateTestEnv()
-	CreateTestDatabase(dEnv, t)
+	sqltestutil.CreateTestDatabase(dEnv, t)
 
 	ctx := context.Background()
 	root, _ := dEnv.WorkingRoot(ctx)
