@@ -24,11 +24,6 @@ import (
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/ref"
 )
 
-const (
-	// BranchesTableName is the system table name
-	BranchesTableName = "dolt_branches"
-)
-
 var _ sql.Table = (*BranchesTable)(nil)
 var _ sql.UpdatableTable = (*BranchesTable)(nil)
 var _ sql.DeletableTable = (*BranchesTable)(nil)
@@ -54,24 +49,24 @@ func NewBranchesTable(sqlCtx *sql.Context, dbName string) (*BranchesTable, error
 // Name is a sql.Table interface function which returns the name of the table which is defined by the constant
 // BranchesTableName
 func (bt *BranchesTable) Name() string {
-	return BranchesTableName
+	return doltdb.BranchesTableName
 }
 
 // String is a sql.Table interface function which returns the name of the table which is defined by the constant
 // BranchesTableName
 func (bt *BranchesTable) String() string {
-	return BranchesTableName
+	return doltdb.BranchesTableName
 }
 
 // Schema is a sql.Table interface function that gets the sql.Schema of the branches system table
 func (bt *BranchesTable) Schema() sql.Schema {
 	return []*sql.Column{
-		{Name: "name", Type: sql.Text, Source: BranchesTableName, PrimaryKey: true, Nullable: false},
-		{Name: "hash", Type: sql.Text, Source: BranchesTableName, PrimaryKey: false, Nullable: false},
-		{Name: "latest_committer", Type: sql.Text, Source: BranchesTableName, PrimaryKey: false, Nullable: true},
-		{Name: "latest_committer_email", Type: sql.Text, Source: BranchesTableName, PrimaryKey: false, Nullable: true},
-		{Name: "latest_commit_date", Type: sql.Datetime, Source: BranchesTableName, PrimaryKey: false, Nullable: true},
-		{Name: "latest_commit_message", Type: sql.Text, Source: BranchesTableName, PrimaryKey: false, Nullable: true},
+		{Name: "name", Type: sql.Text, Source: doltdb.BranchesTableName, PrimaryKey: true, Nullable: false},
+		{Name: "hash", Type: sql.Text, Source: doltdb.BranchesTableName, PrimaryKey: false, Nullable: false},
+		{Name: "latest_committer", Type: sql.Text, Source: doltdb.BranchesTableName, PrimaryKey: false, Nullable: true},
+		{Name: "latest_committer_email", Type: sql.Text, Source: doltdb.BranchesTableName, PrimaryKey: false, Nullable: true},
+		{Name: "latest_commit_date", Type: sql.Datetime, Source: doltdb.BranchesTableName, PrimaryKey: false, Nullable: true},
+		{Name: "latest_commit_message", Type: sql.Text, Source: doltdb.BranchesTableName, PrimaryKey: false, Nullable: true},
 	}
 }
 
@@ -103,13 +98,7 @@ func NewBranchItr(sqlCtx *sql.Context, ddb *doltdb.DoltDB) (*BranchItr, error) {
 	branchNames := make([]string, len(branches))
 	commits := make([]*doltdb.Commit, len(branches))
 	for i, branch := range branches {
-		cs, err := doltdb.NewCommitSpec("HEAD", branch.GetPath())
-
-		if err != nil {
-			return nil, err
-		}
-
-		commit, err := ddb.Resolve(sqlCtx, cs)
+		commit, err := ddb.ResolveRef(sqlCtx, branch)
 
 		if err != nil {
 			return nil, err
@@ -216,14 +205,14 @@ func (bWr branchWriter) Insert(ctx *sql.Context, r sql.Row) error {
 		return err
 	}
 
-	cs, err := doltdb.NewCommitSpec(commitHash, "")
+	cs, err := doltdb.NewCommitSpec(commitHash)
 
 	if err != nil {
 		return err
 	}
 
 	ddb := bWr.bt.ddb
-	cm, err := ddb.Resolve(ctx, cs)
+	cm, err := ddb.Resolve(ctx, cs, nil)
 
 	if err != nil {
 		return err
@@ -256,7 +245,7 @@ func (bWr branchWriter) Delete(ctx *sql.Context, r sql.Row) error {
 	}
 
 	if !exists {
-		return sql.ErrDeleteRowNotFound
+		return sql.ErrDeleteRowNotFound.New()
 	}
 
 	return bWr.bt.ddb.DeleteBranch(ctx, brRef)

@@ -24,13 +24,14 @@ import (
 	"github.com/liquidata-inc/go-mysql-server/auth"
 	"github.com/liquidata-inc/go-mysql-server/server"
 	"github.com/liquidata-inc/go-mysql-server/sql"
+	"github.com/liquidata-inc/vitess/go/mysql"
 	"github.com/sirupsen/logrus"
-	"vitess.io/vitess/go/mysql"
 
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/cli"
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
 	dsqle "github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle"
+	"github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle/dfunctions"
 	_ "github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle/dfunctions"
 )
 
@@ -79,6 +80,12 @@ func Serve(ctx context.Context, version string, serverConfig ServerConfig, serve
 
 	userAuth := auth.NewAudit(auth.NewNativeSingle(serverConfig.User(), serverConfig.Password(), permissions), auth.NewAuditLog(logrus.StandardLogger()))
 	sqlEngine := sqle.NewDefault()
+
+	err := sqlEngine.Catalog.Register(dfunctions.DoltFunctions...)
+
+	if err != nil {
+		return nil, err
+	}
 
 	var username string
 	var email string
@@ -184,14 +191,6 @@ func newSessionBuilder(sqlEngine *sqle.Engine, username, email string, autocommi
 				cli.PrintErr(err)
 				return nil, nil, nil, err
 			}
-		}
-
-		// TODO: this shouldn't need to happen every session
-		sqlCtx.RegisterIndexDriver(dsqle.NewDoltIndexDriver(dbs...))
-		err = ir.LoadIndexes(sqlCtx, sqlEngine.Catalog.AllDatabases())
-
-		if err != nil {
-			return nil, nil, nil, err
 		}
 
 		return doltSess, ir, vr, nil

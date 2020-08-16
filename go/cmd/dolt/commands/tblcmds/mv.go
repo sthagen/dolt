@@ -17,6 +17,8 @@ package tblcmds
 import (
 	"context"
 
+	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/schcmds"
+
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/cli"
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands"
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/errhand"
@@ -65,7 +67,7 @@ func (cmd MvCmd) createArgParser() *argparser.ArgParser {
 	ap := argparser.NewArgParser()
 	ap.ArgListHelp = append(ap.ArgListHelp, [2]string{"oldtable", "The table being moved."})
 	ap.ArgListHelp = append(ap.ArgListHelp, [2]string{"newtable", "The new name of the table"})
-	ap.SupportsFlag(forceParam, "f", "If data already exists in the destination, the Force flag will allow the target to be overwritten.")
+	ap.SupportsFlag(forceParam, "f", "If data already exists in the destination, the force flag will allow the target to be overwritten.")
 	return ap
 }
 
@@ -95,12 +97,12 @@ func (cmd MvCmd) Exec(ctx context.Context, commandStr string, args []string, dEn
 	oldName := apr.Arg(0)
 	newName := apr.Arg(1)
 
-	if doltdb.IsSystemTable(oldName) {
+	if doltdb.HasDoltPrefix(oldName) {
 		return commands.HandleVErrAndExitCode(
-			errhand.BuildDError("error renaming  table %s", oldName).AddCause(doltdb.ErrSystemTableCannotBeModified).Build(), usage)
+			errhand.BuildDError("error renaming table %s", oldName).AddCause(doltdb.ErrSystemTableCannotBeModified).Build(), usage)
 	}
 
-	if verr = ValidateTableNameForCreate(newName); verr != nil {
+	if verr = schcmds.ValidateTableNameForCreate(newName); verr != nil {
 		return commands.HandleVErrAndExitCode(verr, usage)
 	}
 

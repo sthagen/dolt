@@ -29,6 +29,7 @@ import (
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands"
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/cnfcmds"
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/credcmds"
+	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/indexcmds"
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/schcmds"
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/sqlserver"
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/tblcmds"
@@ -36,12 +37,12 @@ import (
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
 	"github.com/liquidata-inc/dolt/go/libraries/events"
-	"github.com/liquidata-inc/dolt/go/libraries/utils/argparser"
 	"github.com/liquidata-inc/dolt/go/libraries/utils/filesys"
+	"github.com/liquidata-inc/dolt/go/store/util/tempfiles"
 )
 
 const (
-	Version = "0.16.3"
+	Version = "0.18.2"
 )
 
 var dumpDocsCommand = &commands.DumpDocsCmd{}
@@ -75,6 +76,9 @@ var doltCommand = cli.NewSubCommandHandler("dolt", "it's git for data", []cli.Co
 	commands.SendMetricsCmd{},
 	dumpDocsCommand,
 	commands.MigrateCmd{},
+	indexcmds.Commands,
+	commands.ReadTablesCmd{},
+	commands.TagCmd{},
 })
 
 func init() {
@@ -148,10 +152,11 @@ func runMain() int {
 
 	warnIfMaxFilesTooLow()
 
-	dEnv := env.Load(context.TODO(), env.GetCurrentUserHomeDir, filesys.LocalFS, doltdb.LocalDirDoltDB, Version)
+	ctx := context.Background()
+	dEnv := env.Load(ctx, env.GetCurrentUserHomeDir, filesys.LocalFS, doltdb.LocalDirDoltDB, Version)
 
 	if dEnv.DBLoadError == nil && commandNeedsMigrationCheck(args) {
-		if commands.MigrationNeeded(context.Background(), dEnv, args) {
+		if commands.MigrationNeeded(ctx, dEnv, args) {
 			return 1
 		}
 	}
@@ -190,11 +195,20 @@ func runMain() int {
 	}()
 
 	if dEnv.CfgLoadErr != nil {
-		cli.PrintErrln(color.RedString("Failed to load the global config.", dEnv.CfgLoadErr))
+		cli.PrintErrln(color.RedString("Failed to load the global config. %v", dEnv.CfgLoadErr))
 		return 1
 	}
 
-	res := doltCommand.Exec(context.Background(), "dolt", args, dEnv)
+	err = reconfigIfTempFileMoveFails(dEnv)
+
+	if err != nil {
+		cli.PrintErrln(color.RedString("Failed to setup the temporary directory. %v`", err))
+		return 1
+	}
+
+	defer tempfiles.MovableTempFileProvider.Clean()
+
+	res := doltCommand.Exec(ctx, "dolt", args, dEnv)
 
 	if csMetrics && dEnv.DoltDB != nil {
 		metricsSummary := dEnv.DoltDB.CSMetricsSummary()
@@ -211,9 +225,10 @@ func commandNeedsMigrationCheck(args []string) bool {
 	}
 
 	// special case for -h, --help
-	_, err := argparser.NewArgParser().Parse(args)
-	if err == argparser.ErrHelp {
-		return false
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return false
+		}
 	}
 
 	subCommandStr := strings.ToLower(strings.TrimSpace(args[0]))

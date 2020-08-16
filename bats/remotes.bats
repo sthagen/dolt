@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 load $BATS_TEST_DIRNAME/helper/common.bash
 
+remotesrv_pid=
 setup() {
     setup_common
     cd $BATS_TMPDIR
@@ -8,18 +9,19 @@ setup() {
     mkdir remotes-$$/empty
     echo remotesrv log available here $BATS_TMPDIR/remotes-$$/remotesrv.log
     remotesrv --http-port 1234 --dir ./remotes-$$ &> ./remotes-$$/remotesrv.log 3>&- &
+    remotesrv_pid=$!
     cd dolt-repo-$$
     mkdir "dolt-repo-clones"
 }
 
 teardown() {
     teardown_common
-    pgrep remotesrv | xargs kill
+    kill $remotesrv_pid
     rm -rf $BATS_TMPDIR/remotes-$$
 }
 
 @test "dolt remotes server is running" {
-    pgrep remotesrv
+    ps -p $remotesrv_pid | grep remotesrv
 }
 
 @test "add a remote using dolt remote" {
@@ -61,9 +63,9 @@ teardown() {
     dolt remote add test-remote http://localhost:50051/test-org/test-repo
     run dolt push test-remote
     [ "$status" -eq 1 ]
-    skip "Bad error message for only one command to push"
-    [[ !"$output" =~ "unable to find" ]] || false
-    [[ "$output" =~ "must specify remote and branch" ]] || false
+    [[ "$output" =~ "fatal: The current branch master has no upstream branch." ]] || false
+    [[ "$output" =~ "To push the current branch and set the remote as upstream, use" ]] || false
+    [[ "$output" =~ "dolt push --set-upstream test-remote master" ]] || false
 }
 
 @test "push and pull master branch from a remote" {
@@ -73,8 +75,7 @@ teardown() {
     [ -d "$BATS_TMPDIR/remotes-$$/test-org/test-repo" ]
     run dolt pull test-remote
     [ "$status" -eq 0 ]
-    skip "Should say Already up to date not fast forward"
-    [[ "$output" = "up to date" ]] || false
+    [[ "$output" =~ "Everything up-to-date" ]] || false
 }
 
 @test "push and pull non-master branch from remote" {
@@ -84,8 +85,7 @@ teardown() {
     [ "$status" -eq 0 ]
     run dolt pull test-remote
     [ "$status" -eq 0 ]
-    skip "Should say up to date not fast forward"
-    [[ "$output" = "up to date" ]] || false
+    [[ "$output" =~ "Everything up-to-date" ]] || false
 }
 
 @test "push and pull from non-master branch and use --set-upstream" {
@@ -172,6 +172,73 @@ SQL
     [[ ! "$output" =~ "README.md" ]] || false
 }
 
+@test "read tables test" {
+    # create table t1 and commit
+    dolt remote add test-remote http://localhost:50051/test-org/test-repo
+    dolt sql <<SQL
+CREATE TABLE t1 (
+  pk BIGINT NOT NULL,
+  PRIMARY KEY (pk)
+);
+SQL
+    dolt add t1
+    dolt commit -m "added t1"
+
+    # create table t2 and commit
+    dolt sql <<SQL
+CREATE TABLE t2 (
+  pk BIGINT NOT NULL,
+  PRIMARY KEY (pk)
+);
+SQL
+    dolt add t2
+    dolt commit -m "added t2"
+
+    # create table t3 and commit
+    dolt sql <<SQL
+CREATE TABLE t3 (
+  pk BIGINT NOT NULL,
+  PRIMARY KEY (pk)
+);
+SQL
+    dolt add t3
+    dolt commit -m "added t3"
+
+    # push repo
+    dolt push test-remote master
+    cd "dolt-repo-clones"
+
+    # Create a read latest tables and verify we have all the tables
+    dolt read-tables http://localhost:50051/test-org/test-repo master
+    cd test-repo
+    run dolt ls
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "t1" ]] || false
+    [[ "$output" =~ "t2" ]] || false
+    [[ "$output" =~ "t3" ]] || false
+    cd ..
+
+    # Read specific table from latest with a specified directory
+    dolt read-tables --dir clone_t1_t2 http://localhost:50051/test-org/test-repo master t1 t2
+    cd clone_t1_t2
+    run dolt ls
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "t1" ]] || false
+    [[ "$output" =~ "t2" ]] || false
+    [[ ! "$output" =~ "t3" ]] || false
+    cd ..
+
+    # Read tables from parent of parent of the tip of master. Should only have table t1
+    dolt read-tables --dir clone_t1 http://localhost:50051/test-org/test-repo master~2
+    cd clone_t1
+    run dolt ls
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "t1" ]] || false
+    [[ ! "$output" =~ "t2" ]] || false
+    [[ ! "$output" =~ "t3" ]] || false
+    cd ..
+}
+
 @test "clone a remote with docs" {
     dolt remote add test-remote http://localhost:50051/test-org/test-repo
     echo "license-text" > LICENSE.md
@@ -205,27 +272,18 @@ SQL
 
 @test "clone an empty remote" {
     run dolt clone http://localhost:50051/test-org/empty
-    [ "$status" -eq 0 ]
-    cd empty
-    run dolt status
-    [ "$status" -eq 0 ]
-    run ls
-    [[ ! "$output" =~ "LICENSE.md" ]] || false
-    [[ ! "$output" =~ "README.md" ]] || false
-    run dolt remote -v
-    [ "$status" -eq 0 ]
-    [[ "$output" =~ "origin" ]] || false
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "error: clone failed" ]] || false
+    [[ "$output" =~ "cause: remote at that url contains no Dolt data" ]] || false
 }
 
 @test "clone a non-existent remote" {
     dolt remote add test-remote http://localhost:50051/test-org/test-repo
     cd "dolt-repo-clones"
-    run dolt clone foo/bar
+    run dolt clone http://localhost:50051/foo/bar
     [ "$status" -eq 1 ]
-    skip "Cloning a non-existant repository fails weirdly and leaves trash"
-    [ "$output" = "fatal: repository 'foo/bar' does not exist" ]
-    [[ ! "$output" =~ "permission denied" ]] || false
-    [ ! -d bar ]
+    [[ "$output" =~ "error: clone failed" ]] || false
+    [[ "$output" =~ "cause: remote at that url contains no Dolt data" ]] || false
 }
 
 @test "clone a different branch than master" {
@@ -300,7 +358,6 @@ SQL
     [ "$output" = "" ]
     run dolt fetch poop refs/heads/master:refs/remotes/poop/master
     [ "$status" -eq 1 ]
-    echo $output
     [[ "$output" =~ "unknown remote" ]] || false
     run dolt fetch test-remote refs/heads/master:refs/remotes/test-remote/poop
     [ "$status" -eq 0 ]
@@ -422,12 +479,11 @@ SQL
     dolt commit -m "test commit"
     dolt push test-remote master
     cd "dolt-repo-clones/test-repo"
-    skip "This remotes/origin/master syntax no longer works but works on git"
     run dolt merge remotes/origin/master
     [ "$status" -eq 0 ]
     # This needs to say up-to-date like the skipped test above
-    # [[ "$output" =~ "up to date" ]]
-    dolt fetch origin master
+    [[ "$output" =~ "Everything up-to-date" ]]
+    run dolt fetch origin master
     [ "$status" -eq 0 ]
     run dolt merge remotes/origin/master
     [ "$status" -eq 0 ]
@@ -569,7 +625,6 @@ SQL
     # master hasn't been pushed so expect zzz to be the current branch and the string master should not be present
     run dolt branch
     [ "$status" -eq 0 ]
-    [[ "$output" =~ "aaa" ]] || false
     [[ "$output" =~ "* zzz" ]] || false
     [[ ! "$output" =~ "master" ]] || false
     cd ../..
@@ -581,8 +636,6 @@ SQL
     # master pushed so it should be the current branch.
     run dolt branch
     [ "$status" -eq 0 ]
-    [[ "$output" =~ "aaa" ]] || false
-    [[ "$output" =~ "zzz" ]] || false
     [[ "$output" =~ "* master" ]] || false
 }
 
@@ -711,4 +764,172 @@ SQL
     [ "$status" -eq 0 ]
     dolt pull
     [ "$status" -eq 0 ]
+}
+
+create_master_remote_branch() {
+    dolt remote add origin http://localhost:50051/test-org/test-repo
+    dolt sql -q 'create table test (id int primary key);'
+    dolt add .
+    dolt commit -m 'create test table.'
+    dolt push origin master:master
+}
+
+create_two_more_remote_branches() {
+    dolt commit --allow-empty -m 'another commit.'
+    dolt push origin master:branch-one
+    dolt sql -q 'insert into test (id) values (1), (2), (3);'
+    dolt add .
+    dolt commit -m 'add some values.'
+    dolt push origin master:branch-two
+}
+
+create_three_remote_branches() {
+    create_master_remote_branch
+    create_two_more_remote_branches
+}
+
+@test "clone creates remotes refs for all remote branches" {
+    create_three_remote_branches
+    cd dolt-repo-clones
+    dolt clone http://localhost:50051/test-org/test-repo
+    cd test-repo
+    run dolt branch -a
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "* master" ]] || false
+    [[ ! "$output" =~ " branch-one" ]] || false
+    [[ ! "$output" =~ " branch-two" ]] || false
+    [[ "$output" =~ "remotes/origin/master" ]] || false
+    [[ "$output" =~ "remotes/origin/branch-one" ]] || false
+    [[ "$output" =~ "remotes/origin/branch-two" ]] || false
+}
+
+@test "fetch creates new remote refs for new remote branches" {
+    create_master_remote_branch
+
+    cd dolt-repo-clones
+    dolt clone http://localhost:50051/test-org/test-repo
+    cd test-repo
+    dolt branch -a
+    run dolt branch -a
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "* master" ]] || false
+    [[ "$output" =~ "remotes/origin/master" ]] || false
+
+    cd ../../
+    create_two_more_remote_branches
+
+    cd dolt-repo-clones/test-repo
+    dolt fetch
+    run dolt branch -a
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "* master" ]] || false
+    [[ "$output" =~ "remotes/origin/master" ]] || false
+    [[ "$output" =~ "remotes/origin/branch-one" ]] || false
+    [[ "$output" =~ "remotes/origin/branch-two" ]] || false
+}
+
+setup_ref_test() {
+    create_master_remote_branch
+
+    cd dolt-repo-clones
+    dolt clone http://localhost:50051/test-org/test-repo
+    cd test-repo
+}
+
+@test "can use refs/remotes/origin/... as commit reference for log" {
+    setup_ref_test
+    dolt log refs/remotes/origin/master
+}
+
+@test "can use refs/remotes/origin/... as commit reference for diff" {
+    setup_ref_test
+    dolt diff HEAD refs/remotes/origin/master
+    dolt diff refs/remotes/origin/master HEAD
+}
+
+@test "can use refs/remotes/origin/... as commit reference for merge" {
+    setup_ref_test
+    dolt merge refs/remotes/origin/master
+}
+
+@test "can use remotes/origin/... as commit reference for log" {
+    setup_ref_test
+    dolt log remotes/origin/master
+}
+
+@test "can use remotes/origin/... as commit reference for diff" {
+    setup_ref_test
+    dolt diff HEAD remotes/origin/master
+    dolt diff remotes/origin/master HEAD
+}
+
+@test "can use remotes/origin/... as commit reference for merge" {
+    setup_ref_test
+    dolt merge remotes/origin/master
+}
+
+@test "can use origin/... as commit reference for log" {
+    setup_ref_test
+    dolt log origin/master
+}
+
+@test "can use origin/... as commit reference for diff" {
+    setup_ref_test
+    dolt diff HEAD origin/master
+    dolt diff origin/master HEAD
+}
+
+@test "can use origin/... as commit reference for merge" {
+    setup_ref_test
+    dolt merge origin/master
+}
+
+@test "can delete remote reference branch as origin/..." {
+    setup_ref_test
+    cd ../../
+    create_two_more_remote_branches
+    cd dolt-repo-clones/test-repo
+    dolt fetch # TODO: Remove this fetch once clone works
+
+    dolt branch -r -d origin/master
+    run dolt branch -a
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "* master" ]] || false
+    [[ ! "$output" =~ "remotes/origin/master" ]] || false
+    [[ "$output" =~ "remotes/origin/branch-one" ]] || false
+    [[ "$output" =~ "remotes/origin/branch-two" ]] || false
+    dolt branch -r -d origin/branch-one origin/branch-two
+    run dolt branch -a
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "* master" ]] || false
+    [[ ! "$output" =~ "remotes/origin/master" ]] || false
+    [[ ! "$output" =~ "remotes/origin/branch-one" ]] || false
+    [[ ! "$output" =~ "remotes/origin/branch-two" ]] || false
+}
+
+@test "can list remote reference branches with -r" {
+    setup_ref_test
+    cd ../../
+    create_two_more_remote_branches
+    cd dolt-repo-clones/test-repo
+    dolt fetch # TODO: Remove this fetch once clone works
+
+    run dolt branch -r
+    [ "$status" -eq 0 ]
+    [[ ! "$output" =~ "* master" ]] || false
+    [[ "$output" =~ "remotes/origin/master" ]] || false
+    [[ "$output" =~ "remotes/origin/branch-one" ]] || false
+    [[ "$output" =~ "remotes/origin/branch-two" ]] || false
+    run dolt branch
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "* master" ]] || false
+    [[ ! "$output" =~ "remotes/origin/master" ]] || false
+    [[ ! "$output" =~ "remotes/origin/branch-one" ]] || false
+    [[ ! "$output" =~ "remotes/origin/branch-two" ]] || false
+    run dolt branch -a
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "* master" ]] || false
+    [[ "$output" =~ "remotes/origin/master" ]] || false
+    [[ "$output" =~ "remotes/origin/branch-one" ]] || false
+    [[ "$output" =~ "remotes/origin/branch-two" ]] || false
 }

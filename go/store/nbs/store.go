@@ -867,7 +867,7 @@ func (nbs *NomsBlockStore) StatsSummary() string {
 // tableFile is our implementation of TableFile.
 type tableFile struct {
 	info TableSpecInfo
-	open func() (io.ReadCloser, error)
+	open func(ctx context.Context) (io.ReadCloser, error)
 }
 
 // FileID gets the id of the file
@@ -881,8 +881,8 @@ func (tf tableFile) NumChunks() int {
 }
 
 // Open returns an io.ReadCloser which can be used to read the bytes of a table file.
-func (tf tableFile) Open() (io.ReadCloser, error) {
-	return tf.open()
+func (tf tableFile) Open(ctx context.Context) (io.ReadCloser, error) {
+	return tf.open(ctx)
 }
 
 // Sources retrieves the current root hash, and a list of all the table files
@@ -917,8 +917,8 @@ func (nbs *NomsBlockStore) Sources(ctx context.Context) (hash.Hash, []TableFile,
 		}
 		tf := tableFile{
 			info: info,
-			open: func() (io.ReadCloser, error) {
-				r, err := cs.reader(context.TODO())
+			open: func(ctx context.Context) (io.ReadCloser, error) {
+				r, err := cs.reader(ctx)
 				if err != nil {
 					return nil, err
 				}
@@ -930,6 +930,44 @@ func (nbs *NomsBlockStore) Sources(ctx context.Context) (hash.Hash, []TableFile,
 	}
 
 	return contents.GetRoot(), tableFiles, nil
+}
+
+func (nbs *NomsBlockStore) Size(ctx context.Context) (uint64, error) {
+	nbs.mu.Lock()
+	defer nbs.mu.Unlock()
+
+	stats := &Stats{}
+	exists, contents, err := nbs.mm.m.ParseIfExists(ctx, stats, nil)
+
+	if err != nil {
+		return uint64(0), err
+	}
+
+	if !exists {
+		return uint64(0), nil
+	}
+
+	css, err := nbs.chunkSourcesByAddr()
+	if err != nil {
+		return uint64(0), err
+	}
+
+	numSpecs := contents.NumTableSpecs()
+
+	size := uint64(0)
+	for i := 0; i < numSpecs; i++ {
+		info := contents.getSpec(i)
+		cs, ok := css[info.name]
+		if !ok {
+			return uint64(0), errors.New("manifest referenced table file for which there is no chunkSource.")
+		}
+		ti, err := cs.index()
+		if err != nil {
+			return uint64(0), fmt.Errorf("error getting table file index for chunkSource. %w", err)
+		}
+		size += ti.tableFileSize()
+	}
+	return size, nil
 }
 
 func (nbs *NomsBlockStore) chunkSourcesByAddr() (map[addr]chunkSource, error) {

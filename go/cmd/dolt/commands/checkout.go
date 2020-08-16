@@ -97,11 +97,21 @@ func (cmd CheckoutCmd) Exec(ctx context.Context, commandStr string, args []strin
 	}
 
 	if newBranch, newBranchOk := apr.GetValue(coBranchArg); newBranchOk {
-		verr := checkoutNewBranch(ctx, dEnv, newBranch, apr)
+		var verr errhand.VerboseError
+		if len(newBranch) == 0 {
+			verr = errhand.BuildDError("error: cannot checkout empty string").Build()
+		} else {
+			verr = checkoutNewBranch(ctx, dEnv, newBranch, apr)
+		}
 		return HandleVErrAndExitCode(verr, usagePrt)
 	}
 
 	name := apr.Arg(0)
+
+	if len(name) == 0 {
+		verr := errhand.BuildDError("error: cannot checkout empty string").Build()
+		return HandleVErrAndExitCode(verr, usagePrt)
+	}
 
 	if isBranch, err := actions.IsBranch(ctx, dEnv, name); err != nil {
 		verr := errhand.BuildDError("error: unable to determine type of checkout").AddCause(err).Build()
@@ -138,7 +148,8 @@ func checkoutRemoteBranch(ctx context.Context, dEnv *env.DoltEnv, name string) e
 }
 
 func getRemoteBranchRef(ctx context.Context, dEnv *env.DoltEnv, name string) (ref.DoltRef, bool, error) {
-	refs, err := dEnv.DoltDB.GetRefs(ctx)
+	remoteRefFilter := map[ref.RefType]struct{}{ref.RemoteRefType: {}}
+	refs, err := dEnv.DoltDB.GetRefsOfType(ctx, remoteRefFilter)
 
 	if err != nil {
 		return nil, false, err

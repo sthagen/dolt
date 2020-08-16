@@ -31,6 +31,13 @@ var ErrNameNotConfigured = errors.New("name not configured")
 var ErrEmailNotConfigured = errors.New("email not configured")
 var ErrEmptyCommitMessage = errors.New("commit message empty")
 
+type CommitStagedProps struct {
+	Message          string
+	Date             time.Time
+	AllowEmpty       bool
+	CheckForeignKeys bool
+}
+
 // GetNameAndEmail returns the name and email from the supplied config
 func GetNameAndEmail(cfg config.ReadableConfig) (string, string, error) {
 	name, err := cfg.GetString(env.UserNameKey)
@@ -52,25 +59,31 @@ func GetNameAndEmail(cfg config.ReadableConfig) (string, string, error) {
 	return name, email, nil
 }
 
-func CommitStaged(ctx context.Context, dEnv *env.DoltEnv, msg string, date time.Time, allowEmpty bool) error {
-	stagedTbls, notStagedTbls, err := diff.GetTableDiffs(ctx, dEnv)
-
-	if msg == "" {
+func CommitStaged(ctx context.Context, dEnv *env.DoltEnv, props CommitStagedProps) error {
+	if props.Message == "" {
 		return ErrEmptyCommitMessage
 	}
 
+	staged, notStaged, err := diff.GetStagedUnstagedTableDeltas(ctx, dEnv)
 	if err != nil {
 		return err
 	}
 
-	_, notStagedDocs, err := diff.GetDocDiffs(ctx, dEnv)
-
-	if err != nil {
-		return err
+	var stagedTblNames []string
+	for _, td := range staged {
+		n := td.ToName
+		if td.IsDrop() {
+			n = td.FromName
+		}
+		stagedTblNames = append(stagedTblNames, n)
 	}
 
-	if len(stagedTbls.Tables) == 0 && dEnv.RepoState.Merge == nil && !allowEmpty {
-		return NothingStaged{notStagedTbls, notStagedDocs}
+	if len(staged) == 0 && !dEnv.IsMergeActive() && !props.AllowEmpty {
+		_, notStagedDocs, err := diff.GetDocDiffs(ctx, dEnv)
+		if err != nil {
+			return err
+		}
+		return NothingStaged{notStaged, notStagedDocs}
 	}
 
 	name, email, err := GetNameAndEmail(dEnv.Config)
@@ -81,7 +94,19 @@ func CommitStaged(ctx context.Context, dEnv *env.DoltEnv, msg string, date time.
 
 	var mergeCmSpec []*doltdb.CommitSpec
 	if dEnv.IsMergeActive() {
-		spec, err := doltdb.NewCommitSpec(dEnv.RepoState.Merge.Commit, dEnv.RepoState.Merge.Head.Ref.String())
+		root, err := dEnv.WorkingRoot(ctx)
+		if err != nil {
+			return err
+		}
+		inConflict, err := root.TablesInConflict(ctx)
+		if err != nil {
+			return err
+		}
+		if len(inConflict) > 0 {
+			return NewTblInConflictError(inConflict)
+		}
+
+		spec, err := doltdb.NewCommitSpec(dEnv.RepoState.Merge.Commit)
 
 		if err != nil {
 			panic("Corrupted repostate. Active merge state is not valid.")
@@ -96,10 +121,17 @@ func CommitStaged(ctx context.Context, dEnv *env.DoltEnv, msg string, date time.
 		return err
 	}
 
-	srt, err = srt.UpdateSuperSchemasFromOther(ctx, stagedTbls.Tables, srt)
+	srt, err = srt.UpdateSuperSchemasFromOther(ctx, stagedTblNames, srt)
 
 	if err != nil {
 		return err
+	}
+
+	if props.CheckForeignKeys {
+		srt, err = srt.ValidateForeignKeys(ctx)
+		if err != nil {
+			return err
+		}
 	}
 
 	h, err := dEnv.UpdateStagedRoot(ctx, srt)
@@ -114,7 +146,7 @@ func CommitStaged(ctx context.Context, dEnv *env.DoltEnv, msg string, date time.
 		return err
 	}
 
-	wrt, err = wrt.UpdateSuperSchemasFromOther(ctx, stagedTbls.Tables, srt)
+	wrt, err = wrt.UpdateSuperSchemasFromOther(ctx, stagedTblNames, srt)
 
 	if err != nil {
 		return err
@@ -126,11 +158,13 @@ func CommitStaged(ctx context.Context, dEnv *env.DoltEnv, msg string, date time.
 		return err
 	}
 
-	meta, noCommitMsgErr := doltdb.NewCommitMetaWithUserTS(name, email, msg, date)
+	meta, noCommitMsgErr := doltdb.NewCommitMetaWithUserTS(name, email, props.Message, props.Date)
 	if noCommitMsgErr != nil {
 		return ErrEmptyCommitMessage
 	}
 
+	// DoltDB resolves the current working branch head ref to provide a parent commit.
+	// Any commit specs in mergeCmSpec are also resolved and added.
 	_, err = dEnv.DoltDB.CommitWithParentSpecs(ctx, h, dEnv.RepoState.CWBHeadRef(), mergeCmSpec, meta)
 
 	if err == nil {
@@ -191,6 +225,10 @@ func AddCommits(ctx context.Context, ddb *doltdb.DoltDB, commit *doltdb.Commit, 
 
 	if err != nil {
 		return err
+	}
+
+	if _, ok := hashToCommit[hash]; ok {
+		return nil
 	}
 
 	hashToCommit[hash] = commit

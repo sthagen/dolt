@@ -91,18 +91,18 @@ type DataLocation interface {
 	Exists(ctx context.Context, root *doltdb.RootValue, fs filesys.ReadableFS) (bool, error)
 
 	// NewReader creates a TableReadCloser for the DataLocation
-	NewReader(ctx context.Context, root *doltdb.RootValue, fs filesys.ReadableFS, schPath string, opts interface{}) (rdCl table.TableReadCloser, sorted bool, err error)
+	NewReader(ctx context.Context, root *doltdb.RootValue, fs filesys.ReadableFS, opts interface{}) (rdCl table.TableReadCloser, sorted bool, err error)
 
 	// NewCreatingWriter will create a TableWriteCloser for a DataLocation that will create a new table, or overwrite
 	// an existing table.
-	NewCreatingWriter(ctx context.Context, mvOpts *MoveOptions, root *doltdb.RootValue, fs filesys.WritableFS, sortedInput bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error)
+	NewCreatingWriter(ctx context.Context, mvOpts DataMoverOptions, root *doltdb.RootValue, fs filesys.WritableFS, sortedInput bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error)
 
 	// NewUpdatingWriter will create a TableWriteCloser for a DataLocation that will update and append rows based on
 	// their primary key.
-	NewUpdatingWriter(ctx context.Context, mvOpts *MoveOptions, root *doltdb.RootValue, fs filesys.WritableFS, srcIsSorted bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error)
+	NewUpdatingWriter(ctx context.Context, mvOpts DataMoverOptions, root *doltdb.RootValue, fs filesys.WritableFS, srcIsSorted bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error)
 
 	// NewReplacingWriter will create a TableWriteCloser for a DataLocation that will overwrite an existing table if it has the same schema.
-	NewReplacingWriter(ctx context.Context, mvOpts *MoveOptions, root *doltdb.RootValue, fs filesys.WritableFS, srcIsSorted bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error)
+	NewReplacingWriter(ctx context.Context, mvOpts DataMoverOptions, root *doltdb.RootValue, fs filesys.WritableFS, srcIsSorted bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error)
 }
 
 // NewDataLocation creates a DataLocation object from a path and a format string.  If the path is the name of a table

@@ -24,6 +24,7 @@ import (
 	"github.com/liquidata-inc/go-mysql-server/sql/expression"
 
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
+	"github.com/liquidata-inc/dolt/go/libraries/doltcore/ref"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle"
 )
 
@@ -50,10 +51,16 @@ func (t *HashOf) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	branchName, ok := val.(string)
+	paramStr, ok := val.(string)
 
 	if !ok {
 		return nil, errors.New("branch name is not a string")
+	}
+
+	name, as, err := doltdb.SplitAncestorSpec(paramStr)
+
+	if err != nil {
+		return nil, err
 	}
 
 	dbName := ctx.GetCurrentDatabase()
@@ -62,19 +69,26 @@ func (t *HashOf) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, sql.ErrDatabaseNotFound.New(dbName)
 	}
 
-	branchName, err = getBranchInsensitive(ctx, branchName, ddb)
+	var cm *doltdb.Commit
+	if strings.ToUpper(name) == "HEAD" {
+		sess := sqle.DSessFromSess(ctx.Session)
+
+		cm, _, err = sess.GetParentCommit(ctx, dbName)
+	} else {
+		branchRef, err := getBranchInsensitive(ctx, name, ddb)
+
+		if err != nil {
+			return nil, err
+		}
+
+		cm, err = ddb.ResolveRef(ctx, branchRef)
+	}
 
 	if err != nil {
 		return nil, err
 	}
 
-	cs, err := doltdb.NewCommitSpec("HEAD", branchName)
-
-	if err != nil {
-		return nil, err
-	}
-
-	cm, err := ddb.Resolve(ctx, cs)
+	cm, err = cm.GetAncestor(ctx, as)
 
 	if err != nil {
 		return nil, err
@@ -83,36 +97,26 @@ func (t *HashOf) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	h, err := cm.HashOf()
 
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	return h.String(), nil
 }
 
-func getBranchInsensitive(ctx context.Context, branchName string, ddb *doltdb.DoltDB) (string, error) {
+func getBranchInsensitive(ctx context.Context, branchName string, ddb *doltdb.DoltDB) (br ref.DoltRef, err error) {
 	branchRefs, err := ddb.GetBranches(ctx)
 
 	if err != nil {
-		return "", err
+		return br, err
 	}
 
-	lowerNameToExact := make(map[string]string)
 	for _, branchRef := range branchRefs {
-		currName := branchRef.GetPath()
-		if currName == branchName {
-			return branchName, nil
-		}
-
-		lowerNameToExact[strings.ToLower(currName)] = currName
-	}
-
-	for lwr, exact := range lowerNameToExact {
-		if lwr == strings.ToLower(branchName) {
-			return exact, nil
+		if strings.ToLower(branchRef.GetPath()) == strings.ToLower(branchName) {
+			return branchRef, nil
 		}
 	}
 
-	return "", doltdb.ErrBranchNotFound
+	return br, doltdb.ErrBranchNotFound
 }
 
 // String implements the Stringer interface.

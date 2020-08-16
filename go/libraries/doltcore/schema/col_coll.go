@@ -217,3 +217,79 @@ func (cc *ColCollection) GetByIndex(idx int) Column {
 func (cc *ColCollection) Size() int {
 	return len(cc.cols)
 }
+
+// ColCollsAreEqual determines whether two ColCollections are equal.
+func ColCollsAreEqual(cc1, cc2 *ColCollection) bool {
+	if cc1.Size() != cc2.Size() {
+		return false
+	}
+
+	areEqual := true
+	_ = cc1.Iter(func(tag uint64, col1 Column) (stop bool, err error) {
+		col2, ok := cc2.GetByTag(tag)
+
+		if !ok || !col1.Equals(col2) {
+			areEqual = false
+			return true, nil
+		}
+
+		return false, nil
+	})
+
+	return areEqual
+}
+
+// MapColCollection applies a function to each column in a ColCollection and creates a new ColCollection from the results.
+func MapColCollection(cc *ColCollection, cb func(col Column) (Column, error)) (*ColCollection, error) {
+	mapped := make([]Column, cc.Size())
+	for i, c := range cc.cols {
+		mc, err := cb(c)
+		if err != nil {
+			return nil, err
+		}
+		mapped[i] = mc
+	}
+	return NewColCollection(mapped...)
+}
+
+// FilterColCollection applies a boolean function to column in a ColCollection, it creates a new ColCollection from the
+// set of columns for which the function returned true.
+func FilterColCollection(cc *ColCollection, cb func(col Column) (bool, error)) (*ColCollection, error) {
+	filtered := make([]Column, 0, cc.Size())
+	for _, c := range cc.cols {
+		keep, err := cb(c)
+		if err != nil {
+			return nil, err
+		}
+		if keep {
+			filtered = append(filtered, c)
+		}
+	}
+	return NewColCollection(filtered...)
+}
+
+func ColCollUnion(colColls ...*ColCollection) (*ColCollection, error) {
+	var allCols []Column
+	// TODO: error on tag collision
+	for _, sch := range colColls {
+		err := sch.Iter(func(tag uint64, col Column) (stop bool, err error) {
+			allCols = append(allCols, col)
+			return false, nil
+		})
+
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return NewColCollection(allCols...)
+}
+
+// ColCollectionSetDifference returns the set difference leftCC - rightCC.
+func ColCollectionSetDifference(leftCC, rightCC *ColCollection) (d *ColCollection) {
+	d, _ = FilterColCollection(leftCC, func(col Column) (b bool, err error) {
+		_, ok := rightCC.GetByTag(col.Tag)
+		return !ok, nil
+	})
+	return d
+}

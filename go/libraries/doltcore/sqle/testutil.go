@@ -23,7 +23,7 @@ import (
 
 	sqle "github.com/liquidata-inc/go-mysql-server"
 	"github.com/liquidata-inc/go-mysql-server/sql"
-	"vitess.io/vitess/go/vt/sqlparser"
+	"github.com/liquidata-inc/vitess/go/vt/sqlparser"
 
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
@@ -107,13 +107,6 @@ func NewTestEngine(ctx context.Context, db Database, root *doltdb.RootValue) (*s
 	DSessFromSess(sqlCtx.Session).AddDB(ctx, db)
 	sqlCtx.SetCurrentDatabase(db.Name())
 	err := db.SetRoot(sqlCtx, root)
-
-	if err != nil {
-		return nil, nil, err
-	}
-
-	sqlCtx.RegisterIndexDriver(NewDoltIndexDriver(db))
-	err = sqlCtx.LoadIndexes(sqlCtx, engine.Catalog.AllDatabases())
 
 	if err != nil {
 		return nil, nil, err

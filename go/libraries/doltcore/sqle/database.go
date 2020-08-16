@@ -25,8 +25,8 @@ import (
 	"github.com/liquidata-inc/go-mysql-server/sql"
 	"github.com/liquidata-inc/go-mysql-server/sql/parse"
 	"github.com/liquidata-inc/go-mysql-server/sql/plan"
+	"github.com/liquidata-inc/vitess/go/vt/proto/query"
 	"gopkg.in/src-d/go-errors.v1"
-	"vitess.io/vitess/go/vt/proto/query"
 
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
@@ -196,29 +196,27 @@ func (db Database) GetTableInsensitive(ctx *sql.Context, tblName string) (sql.Ta
 
 func (db Database) GetTableInsensitiveWithRoot(ctx *sql.Context, root *doltdb.RootValue, tblName string) (sql.Table, bool, error) {
 	lwrName := strings.ToLower(tblName)
-	if strings.HasPrefix(lwrName, DoltDiffTablePrefix) {
-		tblName = tblName[len(DoltDiffTablePrefix):]
-		dt, err := NewDiffTable(ctx, db.Name(), tblName)
 
-		if err != nil {
-			return nil, false, err
-		}
-
-		return dt, true, nil
+	prefixToNew := map[string]func(*sql.Context, Database, string) (sql.Table, error){
+		doltdb.DoltDiffTablePrefix:    NewDiffTable,
+		doltdb.DoltHistoryTablePrefix: NewHistoryTable,
+		doltdb.DoltConfTablePrefix:    NewConflictsTable,
 	}
 
-	if strings.HasPrefix(lwrName, DoltHistoryTablePrefix) {
-		tblName = tblName[len(DoltHistoryTablePrefix):]
-		dh, err := NewHistoryTable(ctx, db.Name(), tblName)
+	for prefix, newFunc := range prefixToNew {
+		if strings.HasPrefix(lwrName, prefix) {
+			tblName = tblName[len(prefix):]
+			dt, err := newFunc(ctx, db, tblName)
 
-		if err != nil {
-			return nil, false, err
+			if err != nil {
+				return nil, false, err
+			}
+
+			return dt, true, nil
 		}
-
-		return dh, true, nil
 	}
 
-	if lwrName == LogTableName {
+	if lwrName == doltdb.LogTableName {
 		lt, err := NewLogTable(ctx, db.Name())
 
 		if err != nil {
@@ -228,7 +226,17 @@ func (db Database) GetTableInsensitiveWithRoot(ctx *sql.Context, root *doltdb.Ro
 		return lt, true, nil
 	}
 
-	if lwrName == BranchesTableName {
+	if lwrName == doltdb.TableOfTablesInConflictName {
+		ct, err := NewTableOfTablesInConflict(ctx, db.Name())
+
+		if err != nil {
+			return nil, false, err
+		}
+
+		return ct, true, nil
+	}
+
+	if lwrName == doltdb.BranchesTableName {
 		bt, err := NewBranchesTable(ctx, db.Name())
 
 		if err != nil {
@@ -267,12 +275,12 @@ func (db Database) rootAsOf(ctx *sql.Context, asOf interface{}) (*doltdb.RootVal
 }
 
 func (db Database) getRootForTime(ctx *sql.Context, asOf time.Time) (*doltdb.RootValue, error) {
-	cs, err := doltdb.NewCommitSpec("HEAD", db.rsr.CWBHeadRef().String())
+	cs, err := doltdb.NewCommitSpec("HEAD")
 	if err != nil {
 		return nil, err
 	}
 
-	cm, err := db.ddb.Resolve(ctx, cs)
+	cm, err := db.ddb.Resolve(ctx, cs, db.rsr.CWBHeadRef())
 	if err != nil {
 		return nil, err
 	}
@@ -309,12 +317,12 @@ func (db Database) getRootForTime(ctx *sql.Context, asOf time.Time) (*doltdb.Roo
 }
 
 func (db Database) getRootForCommitRef(ctx *sql.Context, commitRef string) (*doltdb.RootValue, error) {
-	cs, err := doltdb.NewCommitSpec(commitRef, db.rsr.CWBHeadRef().String())
+	cs, err := doltdb.NewCommitSpec(commitRef)
 	if err != nil {
 		return nil, err
 	}
 
-	cm, err := db.ddb.Resolve(ctx, cs)
+	cm, err := db.ddb.Resolve(ctx, cs, db.rsr.CWBHeadRef())
 	if err != nil {
 		return nil, err
 	}
@@ -376,7 +384,7 @@ func (db Database) getTable(ctx context.Context, root *doltdb.RootValue, tableNa
 	var table sql.Table
 
 	readonlyTable := DoltTable{name: tableName, table: tbl, sch: sch, db: db}
-	if doltdb.IsSystemTable(tableName) {
+	if doltdb.IsReadOnlySystemTable(tableName) {
 		table = &readonlyTable
 	} else if doltdb.HasDoltPrefix(tableName) {
 		table = &WritableDoltTable{DoltTable: readonlyTable}
@@ -506,6 +514,11 @@ func (db Database) SetRoot(ctx *sql.Context, newRoot *doltdb.RootValue) error {
 	dsess := DSessFromSess(ctx.Session)
 	dsess.dbRoots[db.name] = dbRoot{hashStr, newRoot}
 
+	err = dsess.dbEditors[db.name].SetRoot(ctx, newRoot)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -529,7 +542,7 @@ func (db Database) DropTable(ctx *sql.Context, tableName string) error {
 		return err
 	}
 
-	if doltdb.IsSystemTable(tableName) {
+	if doltdb.IsReadOnlySystemTable(tableName) {
 		return ErrSystemTableAlter.New(tableName)
 	}
 
@@ -593,19 +606,21 @@ func (db Database) createTable(ctx *sql.Context, tableName string, sch sql.Schem
 		return err
 	}
 
-	tt, err := root.TablesNamesForTags(ctx, doltSch.GetAllCols().Tags...)
-	if err != nil {
-		return err
-	}
-	if len(tt) > 0 {
-		var ee []string
-		_ = doltSch.GetAllCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
-			if collisionTable, tagExists := tt[tag]; tagExists {
-				ee = append(ee, schema.ErrTagPrevUsed(tag, col.Name, collisionTable).Error())
-			}
-			return false, nil
-		})
-		return fmt.Errorf(strings.Join(ee, "\n"))
+	var conflictingTbls []string
+	_ = doltSch.GetAllCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
+		_, tbl, exists, err := root.GetTableByColTag(ctx, tag)
+		if err != nil {
+			return true, err
+		}
+		if exists {
+			errStr := schema.ErrTagPrevUsed(tag, col.Name, tbl).Error()
+			conflictingTbls = append(conflictingTbls, errStr)
+		}
+		return false, nil
+	})
+
+	if len(conflictingTbls) > 0 {
+		return fmt.Errorf(strings.Join(conflictingTbls, "\n"))
 	}
 
 	newRoot, err := root.CreateEmptyTable(ctx, tableName, doltSch)
@@ -624,7 +639,7 @@ func (db Database) RenameTable(ctx *sql.Context, oldName, newName string) error 
 		return err
 	}
 
-	if doltdb.IsSystemTable(oldName) {
+	if doltdb.IsReadOnlySystemTable(oldName) {
 		return ErrSystemTableAlter.New(oldName)
 	}
 
@@ -634,6 +649,10 @@ func (db Database) RenameTable(ctx *sql.Context, oldName, newName string) error 
 
 	if !doltdb.IsValidTableName(newName) {
 		return ErrInvalidTableName.New(newName)
+	}
+
+	if _, ok, _ := db.GetTableInsensitive(ctx, newName); ok {
+		return sql.ErrTableAlreadyExists.New(newName)
 	}
 
 	newRoot, err := alterschema.RenameTable(ctx, root, oldName, newName)
@@ -729,6 +748,11 @@ func (db Database) DropView(ctx *sql.Context, name string) error {
 	}
 
 	return deleter.Close(ctx)
+}
+
+// TableEditSession returns the TableEditSession for this database from the given context.
+func (db Database) TableEditSession(ctx *sql.Context) *doltdb.TableEditSession {
+	return DSessFromSess(ctx.Session).dbEditors[db.name]
 }
 
 // RegisterSchemaFragments register SQL schema fragments that are persisted in the given

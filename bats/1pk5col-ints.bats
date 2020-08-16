@@ -337,7 +337,13 @@ teardown() {
     dolt branch test
     run dolt checkout test
     [ "$status" -eq 0 ]
-    skip "behavior ambiguous right now. should reset test table and switch to branch per git"
+    # Checks out branch "test" table "test" unaltered.  Matches git behavior for:
+    #
+    # git init
+    # git commit --allow-empty -m "create"
+    # touch test
+    # git branch test
+    # git checkout test
 }
 
 @test "make a change on a different branch, commit, and merge to master" {
@@ -404,6 +410,12 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" =~ \+[[:space:]]+\|[[:space:]]+ours[[:space:]] ]] || false
     [[ "$output" =~ \+[[:space:]]+\|[[:space:]]+theirs[[:space:]] ]] || false
+
+    EXPECTED=$(echo -e "table,num_conflicts\ntest,1")
+    run dolt sql -r csv -q 'SELECT * FROM dolt_conflicts'
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "$EXPECTED" ]] || false
+
     run dolt conflicts resolve --ours test
     [ "$status" -eq 0 ]
     [ "$output" = "" ]
@@ -496,7 +508,13 @@ teardown() {
 }
 
 @test "import data from a csv file with a bad line" {
-    run dolt table import test -u `batshelper 1pk5col-ints-badline.csv`
+    cat <<DELIM > badline.csv
+pk,c1,c2,c3,c4,c5
+0,1,2,3,4,5
+1,1,2,3,4,5
+2
+DELIM
+    run dolt table import test -u badline.csv
     [ "$status" -eq 1 ]
     [[ "${lines[0]}" =~ "Additions" ]] || false
     [[ "${lines[1]}" =~ "A bad row was encountered" ]] || false
@@ -518,32 +536,38 @@ cat <<DELIM > bad.csv
 pk,c1, ,c3,c4,c5
 0,1,2,3,4,5
 DELIM
-        run dolt table import test -u bad.csv
-        [ "$status" -eq 1 ]
-        [[ "$output" =~ "bad header line: column cannot be NULL or empty string" ]] || false
-        [[ ! "$output" =~ "panic" ]] || false
+    run dolt table import test -u bad.csv
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "bad header line: column cannot be NULL or empty string" ]] || false
+    [[ ! "$output" =~ "panic" ]] || false
 
 cat <<DELIM > bad.csv
 pk,c1,"",c3,c4,c5
 0,1,2,3,4,5
 DELIM
-        run dolt table import test -u bad.csv
-        [ "$status" -eq 1 ]
-        [[ "$output" =~ "bad header line: column cannot be NULL or empty string" ]] || false
-        [[ ! "$output" =~ "panic" ]] || false
+    run dolt table import test -u bad.csv
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "bad header line: column cannot be NULL or empty string" ]] || false
+    [[ ! "$output" =~ "panic" ]] || false
 
 cat <<DELIM > bad.csv
 pk,c1," ",c3,c4,c5
 0,1,2,3,4,5
 DELIM
-        run dolt table import test -u bad.csv
-        [ "$status" -eq 1 ]
-        [[ "$output" =~ "bad header line: column cannot be NULL or empty string" ]] || false
-        [[ ! "$output" =~ "panic" ]] || false
+    run dolt table import test -u bad.csv
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "bad header line: column cannot be NULL or empty string" ]] || false
+    [[ ! "$output" =~ "panic" ]] || false
 }
 
 @test "import data from a psv file after table created" {
-    run dolt table import test -u  `batshelper 1pk5col-ints.psv`
+    cat <<DELIM > 1pk5col-ints.psv
+pk|c1|c2|c3|c4|c5
+0|1|2|3|4|5
+1|1|2|3|4|5
+DELIM
+
+    run dolt table import test -u 1pk5col-ints.psv
     [ "$status" -eq 0 ]
     [[ "$output" =~ "Import completed successfully." ]] || false
     run dolt sql -q "select * from test"
@@ -658,9 +682,10 @@ DELIM
     dolt commit -m "added row to test"
     dolt checkout test-branch-m
     run dolt merge test-branch
+    echo $output
     [ "$status" -eq 0 ]
-    [ "${lines[1]}" = "test | 0 " ]
-    skip "Row addition not totalled correctly" [ "${lines[2]}" = "1 tables changed, 1 rows added(+), 0 rows modified(*), 0 rows deleted(-)" ]
+    [ "${lines[1]}" = "test | 1 +" ]
+    [ "${lines[2]}" = "1 tables changed, 1 rows added(+), 0 rows modified(*), 0 rows deleted(-)" ]
 }
 
 @test "checkout table with branch of same name" {

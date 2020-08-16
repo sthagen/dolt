@@ -29,6 +29,10 @@ import (
 func isHelp(str string) bool {
 	str = strings.TrimSpace(str)
 
+	if len(str) == 0 {
+		return false
+	}
+
 	if str[0] != '-' {
 		return false
 	}
@@ -96,11 +100,16 @@ type SubCommandHandler struct {
 	name        string
 	description string
 	Subcommands []Command
+	hidden      bool
 }
 
 // NewSubCommandHandler returns a new SubCommandHandler instance
 func NewSubCommandHandler(name, description string, subcommands []Command) SubCommandHandler {
-	return SubCommandHandler{name, description, subcommands}
+	return SubCommandHandler{name, description, subcommands, false}
+}
+
+func NewHiddenSubCommandHandler(name, description string, subcommands []Command) SubCommandHandler {
+	return SubCommandHandler{name, description, subcommands, true}
 }
 
 func (hc SubCommandHandler) Name() string {
@@ -117,6 +126,10 @@ func (hc SubCommandHandler) RequiresRepo() bool {
 
 func (hc SubCommandHandler) CreateMarkdown(_ filesys.Filesys, _, _ string) error {
 	return nil
+}
+
+func (hc SubCommandHandler) Hidden() bool {
+	return hc.hidden
 }
 
 func (hc SubCommandHandler) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {

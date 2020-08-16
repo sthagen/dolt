@@ -16,6 +16,7 @@ package schcmds
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,12 +26,12 @@ import (
 
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/cli"
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands"
-	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/tblcmds"
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/errhand"
 	eventsapi "github.com/liquidata-inc/dolt/go/gen/proto/dolt/services/eventsapi/v1alpha1"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env/actions"
+	"github.com/liquidata-inc/dolt/go/libraries/doltcore/rowconv"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema/encoding"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle/sqlfmt"
@@ -38,6 +39,8 @@ import (
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/table/untyped/csv"
 	"github.com/liquidata-inc/dolt/go/libraries/utils/argparser"
 	"github.com/liquidata-inc/dolt/go/libraries/utils/filesys"
+	"github.com/liquidata-inc/dolt/go/libraries/utils/funcitr"
+	"github.com/liquidata-inc/dolt/go/libraries/utils/set"
 	"github.com/liquidata-inc/dolt/go/store/types"
 )
 
@@ -54,6 +57,16 @@ const (
 	delimParam          = "delim"
 )
 
+var MappingFileHelp = "A mapping file is json in the format:" + `
+
+	{
+		"source_field_name":"dest_field_name"
+		...
+	}
+
+where source_field_name is the name of a field in the file being imported and dest_field_name is the name of a field in the table being imported to.
+`
+
 var schImportDocs = cli.CommandDocumentationContent{
 	ShortDesc: "Creates a new table with an inferred schema.",
 	LongDesc: `If {{.EmphasisLeft}}--create | -c{{.EmphasisRight}} is given the operation will create {{.LessThan}}table{{.GreaterThan}} with a schema that it infers from the supplied file. One or more primary key columns must be specified using the {{.EmphasisLeft}}--pks{{.EmphasisRight}} parameter.
@@ -64,7 +77,7 @@ If {{.EmphasisLeft}}--replace | -r{{.EmphasisRight}} is given the operation will
 
 A mapping file can be used to map fields between the file being imported and the table's schema being inferred.  This can be used when creating a new table, or updating or replacing an existing table.
 
-tblcmds.MappingFileHelp
+` + MappingFileHelp + `
 
 In create, update, and replace scenarios the file's extension is used to infer the type of the file.  If a file does not have the expected extension then the {{.EmphasisLeft}}--file-type{{.EmphasisRight}} parameter should be used to explicitly define the format of the file in one of the supported formats (Currently only csv is supported).  For files separated by a delimiter other than a ',', the --delim parameter can be used to specify a delimeter.
 
@@ -74,24 +87,36 @@ If the parameter {{.EmphasisLeft}}--dry-run{{.EmphasisRight}} is supplied a sql 
 `,
 
 	Synopsis: []string{
-		`[--create|--replace] [--force] [--dry-run] [--lower|--upper] [--keep-types] [--file-type {{.LessThan}}type{{.GreaterThan}}] [--float-threshold] [--map {{.LessThan}}mapping-file{{.GreaterThan}}] [--delim {{.LessThan}}delimiter{{.GreaterThan}}]--pks {{.LessThan}}field{{.GreaterThan}},... {{.LessThan}}table{{.GreaterThan}} {{.LessThan}}file{{.GreaterThan}}`,
+		`[--create|--replace] [--force] [--dry-run] [--lower|--upper] [--keep-types] [--file-type <type>] [--float-threshold] [--map {{.LessThan}}mapping-file{{.GreaterThan}}] [--delim {{.LessThan}}delimiter{{.GreaterThan}}]--pks {{.LessThan}}field{{.GreaterThan}},... {{.LessThan}}table{{.GreaterThan}} {{.LessThan}}file{{.GreaterThan}}`,
 	},
 }
 
-type importOp int
+type SchImportOp int
 
 const (
-	createOp importOp = iota
-	updateOp
-	replaceOp
+	CreateOp SchImportOp = iota
+	UpdateOp
+	ReplaceOp
 )
 
-type importArgs struct {
-	op        importOp
-	fileType  string
-	fileName  string
-	delim     string
-	inferArgs *actions.InferenceArgs
+type importOptions struct {
+	op             SchImportOp
+	fileName       string
+	fileType       string
+	delim          string
+	tableName      string
+	existingSch    schema.Schema
+	PkCols         []string
+	keepTypes      bool
+	colMapper      rowconv.NameMapper
+	floatThreshold float64
+}
+
+func (im *importOptions) ColNameMapper() rowconv.NameMapper {
+	return im.colMapper
+}
+func (im *importOptions) FloatThreshold() float64 {
+	return im.floatThreshold
 }
 
 type ImportCmd struct{}
@@ -128,7 +153,7 @@ func (cmd ImportCmd) createArgParser() *argparser.ArgParser {
 	ap.SupportsFlag(keepTypesParam, "", "When a column already exists in the table, and it's also in the {{.LessThan}}file{{.GreaterThan}} provided, use the type from the table.")
 	ap.SupportsString(fileTypeParam, "", "type", "Explicitly define the type of the file if it can't be inferred from the file extension.")
 	ap.SupportsString(pksParam, "", "comma-separated-col-names", "List of columns used as the primary key cols.  Order of the columns will determine sort order.")
-	ap.SupportsString(mappingParam, "", "mapping-file", "A file that can map a column name in {{.LessThan}}file{{.GreaterThan}} to a new value.")
+	ap.SupportsString(mappingParam, "m", "mapping-file", "A file that can map a column name in {{.LessThan}}file{{.GreaterThan}} to a new value.")
 	ap.SupportsString(floatThresholdParam, "", "float", "Minimum value at which the fractional component of a value must exceed in order to be considered a float.")
 	ap.SupportsString(delimParam, "", "delimiter", "Specify a delimiter for a csv style file with a non-comma delimiter.")
 	return ap
@@ -149,51 +174,47 @@ func (cmd ImportCmd) Exec(ctx context.Context, commandStr string, args []string,
 	return commands.HandleVErrAndExitCode(importSchema(ctx, dEnv, apr), usage)
 }
 
-func importSchema(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgParseResults) errhand.VerboseError {
-	root, verr := commands.GetWorkingWithVErr(dEnv)
-
-	if verr != nil {
-		return verr
-	}
-
+func getSchemaImportArgs(ctx context.Context, apr *argparser.ArgParseResults, dEnv *env.DoltEnv, root *doltdb.RootValue) (*importOptions, errhand.VerboseError) {
 	tblName := apr.Arg(0)
 	fileName := apr.Arg(1)
 
 	fileExists, _ := dEnv.FS.Exists(fileName)
 
 	if !fileExists {
-		return errhand.BuildDError("error: file '%s' not found.", fileName).Build()
+		return nil, errhand.BuildDError("error: file '%s' not found.", fileName).Build()
 	}
 
-	if err := tblcmds.ValidateTableNameForCreate(tblName); err != nil {
-		return err
+	if err := ValidateTableNameForCreate(tblName); err != nil {
+		return nil, err
 	}
 
-	op := createOp
-	if !apr.ContainsAny(createFlag, updateFlag, replaceFlag) {
-		return errhand.BuildDError("error: missing required parameter.").AddDetails("Must provide exactly one of the operation flags '--create', or '--replace'").SetPrintUsage().Build()
-	} else if apr.Contains(updateFlag) {
-		if apr.ContainsAny(createFlag, replaceFlag) {
-			return errhand.BuildDError("error: multiple operations supplied").AddDetails("Only one of the flags '--create', '--update', or '--replace' may be provided").SetPrintUsage().Build()
-		}
-		op = updateOp
-	} else if apr.Contains(replaceFlag) {
-		if apr.Contains(createFlag) {
-			return errhand.BuildDError("error: multiple operations supplied").AddDetails("Only one of the flags '--create', '--update', or '--replace' may be provided").SetPrintUsage().Build()
-		}
-		op = replaceOp
-	} else {
-		if apr.Contains(keepTypesParam) {
-			return errhand.BuildDError("error: parameter keep-types not supported for create operations").AddDetails("keep-types parameter is used to keep the existing column types as is without modification.").Build()
-		}
+	flags := apr.ContainsMany(createFlag, updateFlag, replaceFlag)
+	if len(flags) == 0 {
+		return nil, errhand.BuildDError("error: missing required parameter.").AddDetails("Must provide exactly one of the operation flags '--create', or '--replace'").SetPrintUsage().Build()
+	} else if len(flags) > 1 {
+		return nil, errhand.BuildDError("error: multiple operations supplied").AddDetails("Only one of the flags '--create', '--update', or '--replace' may be provided").SetPrintUsage().Build()
+	}
+
+	var op SchImportOp
+	switch flags[0] {
+	case createFlag:
+		op = CreateOp
+	case updateFlag:
+		op = UpdateOp
+	case replaceFlag:
+		op = ReplaceOp
+	}
+
+	if apr.Contains(keepTypesParam) && op == CreateOp {
+		return nil, errhand.BuildDError("error: parameter keep-types not supported for create operations").AddDetails("keep-types parameter is used to keep the existing column types as is without modification.").Build()
 	}
 
 	tbl, tblExists, err := root.GetTable(ctx, tblName)
 
 	if err != nil {
-		return errhand.BuildDError("error: failed to read from database.").AddCause(err).Build()
-	} else if tblExists && op == createOp {
-		return errhand.BuildDError("error: failed to create table.").AddDetails("A table named '%s' already exists.", tblName).AddDetails("Use --replace or --update instead of --create.").Build()
+		return nil, errhand.BuildDError("error: failed to read from database.").AddCause(err).Build()
+	} else if tblExists && op == CreateOp {
+		return nil, errhand.BuildDError("error: failed to create table.").AddDetails("A table named '%s' already exists.", tblName).AddDetails("Use --replace or --update instead of --create.").Build()
 	}
 
 	var existingSch schema.Schema = schema.EmptySchema
@@ -201,86 +222,75 @@ func importSchema(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPars
 		existingSch, err = tbl.GetSchema(ctx)
 
 		if err != nil {
-			return errhand.BuildDError("error: failed to read schema from '%s'", tblName).AddCause(err).Build()
+			return nil, errhand.BuildDError("error: failed to read schema from '%s'", tblName).AddCause(err).Build()
 		}
 	}
 
 	val, pksOK := apr.GetValue(pksParam)
+	pks := funcitr.MapStrings(strings.Split(val, ","), strings.TrimSpace)
+	pks = funcitr.FilterStrings(pks, func(s string) bool { return s != "" })
 
-	var pks []string
-	if pksOK {
-		pks = strings.Split(val, ",")
-		goodPKS := make([]string, 0, len(pks))
-
-		for _, pk := range pks {
-			pk = strings.TrimSpace(pk)
-
-			if pk != "" {
-				goodPKS = append(goodPKS, pk)
-			}
-		}
-
-		pks = goodPKS
-
-		if len(pks) == 0 {
-			return errhand.BuildDError("error: no valid columns provided in --pks argument").Build()
-		}
-	} else {
-		return errhand.BuildDError("error: missing required parameter pks").SetPrintUsage().Build()
+	if !pksOK {
+		return nil, errhand.BuildDError("error: missing required parameter pks").SetPrintUsage().Build()
+	}
+	if len(pks) == 0 {
+		return nil, errhand.BuildDError("error: no valid columns provided in --pks argument").Build()
 	}
 
 	mappingFile := apr.GetValueOrDefault(mappingParam, "")
+	colMapper, err := rowconv.NameMapperFromFile(mappingFile, dEnv.FS)
 
-	var colMapper actions.StrMapper
-	if mappingFile != "" {
-		if mappingExists, _ := dEnv.FS.Exists(mappingFile); mappingExists {
-			var m map[string]string
-			err := filesys.UnmarshalJSONFile(dEnv.FS, mappingFile, &m)
-
-			if err != nil {
-				return errhand.BuildDError("error: invalid mapper file.").AddCause(err).Build()
-			}
-
-			colMapper = actions.MapMapper(m)
-		} else {
-			return errhand.BuildDError("error: '%s' does not exist.", mappingFile).Build()
-		}
-	} else {
-		colMapper = actions.IdentityMapper{}
+	if err != nil {
+		return nil, errhand.VerboseErrorFromError(err)
 	}
 
 	floatThresholdStr := apr.GetValueOrDefault(floatThresholdParam, "0.0")
 	floatThreshold, err := strconv.ParseFloat(floatThresholdStr, 64)
 
 	if err != nil {
-		return errhand.BuildDError("error: '%s' is not a valid float in the range 0.0 (all floats) to 1.0 (no floats)", floatThresholdStr).SetPrintUsage().Build()
+		return nil, errhand.BuildDError("error: '%s' is not a valid float in the range 0.0 (all floats) to 1.0 (no floats)", floatThresholdStr).SetPrintUsage().Build()
 	}
 
-	delim := apr.GetValueOrDefault(delimParam, ",")
+	return &importOptions{
+		op:             op,
+		fileName:       fileName,
+		fileType:       apr.GetValueOrDefault(fileTypeParam, filepath.Ext(fileName)),
+		delim:          apr.GetValueOrDefault(delimParam, ","),
+		tableName:      tblName,
+		existingSch:    existingSch,
+		PkCols:         pks,
+		keepTypes:      apr.Contains(keepTypesParam),
+		colMapper:      colMapper,
+		floatThreshold: floatThreshold,
+	}, nil
+}
 
-	impArgs := importArgs{
-		op:       op,
-		fileName: fileName,
-		delim:    delim,
-		fileType: apr.GetValueOrDefault(fileTypeParam, filepath.Ext(fileName)),
-		inferArgs: &actions.InferenceArgs{
-			ExistingSch:    existingSch,
-			ColMapper:      colMapper,
-			FloatThreshold: floatThreshold,
-			KeepTypes:      apr.Contains(keepTypesParam),
-			Update:         op == updateOp,
-		},
-	}
-
-	sch, verr := inferSchemaFromFile(ctx, dEnv.DoltDB.ValueReadWriter().Format(), pks, &impArgs)
+func importSchema(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgParseResults) errhand.VerboseError {
+	root, verr := commands.GetWorkingWithVErr(dEnv)
 
 	if verr != nil {
 		return verr
 	}
 
-	cli.Println(sqlfmt.SchemaAsCreateStmt(tblName, sch))
+	impArgs, verr := getSchemaImportArgs(ctx, apr, dEnv, root)
+
+	if verr != nil {
+		return verr
+	}
+
+	sch, verr := inferSchemaFromFile(ctx, dEnv.DoltDB.ValueReadWriter().Format(), impArgs, root)
+
+	if verr != nil {
+		return verr
+	}
+
+	tblName := impArgs.tableName
+	// inferred schemas have no foreign keys
+	cli.Println(sqlfmt.CreateTableStmtWithTags(tblName, sch, nil, nil))
 
 	if !apr.Contains(dryRunFlag) {
+		tbl, tblExists, err := root.GetTable(ctx, tblName)
+
 		schVal, err := encoding.MarshalSchemaAsNomsValue(context.Background(), root.VRW(), sch)
 
 		if err != nil {
@@ -293,7 +303,16 @@ func importSchema(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPars
 			return errhand.BuildDError("error: failed to create table.").AddCause(err).Build()
 		}
 
-		tbl, err = doltdb.NewTable(ctx, root.VRW(), schVal, m)
+		var indexData *types.Map
+		if tblExists {
+			existingIndexData, err := tbl.GetIndexData(ctx)
+			if err != nil {
+				return errhand.BuildDError("error: failed to create table.").AddCause(err).Build()
+			}
+			indexData = &existingIndexData
+		}
+
+		tbl, err = doltdb.NewTable(ctx, root.VRW(), schVal, m, indexData)
 
 		if err != nil {
 			return errhand.BuildDError("error: failed to create table.").AddCause(err).Build()
@@ -317,39 +336,197 @@ func importSchema(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPars
 	return nil
 }
 
-func inferSchemaFromFile(ctx context.Context, nbf *types.NomsBinFormat, pkCols []string, args *importArgs) (schema.Schema, errhand.VerboseError) {
-	if args.fileType[0] == '.' {
-		args.fileType = args.fileType[1:]
+func inferSchemaFromFile(ctx context.Context, nbf *types.NomsBinFormat, impOpts *importOptions, root *doltdb.RootValue) (schema.Schema, errhand.VerboseError) {
+	if impOpts.fileType[0] == '.' {
+		impOpts.fileType = impOpts.fileType[1:]
 	}
 
 	var rd table.TableReadCloser
-	switch args.fileType {
+	csvInfo := csv.NewCSVInfo().SetDelim(",")
+
+	switch impOpts.fileType {
 	case "csv":
-		f, err := os.Open(args.fileName)
-
-		if err != nil {
-			return nil, errhand.BuildDError("error: failed to open '%s'", args.fileName).Build()
+		if impOpts.delim != "" {
+			csvInfo.SetDelim(impOpts.delim)
 		}
-
-		defer f.Close()
-
-		rd, err = csv.NewCSVReader(nbf, f, csv.NewCSVInfo().SetDelim(args.delim))
-
-		if err != nil {
-			return nil, errhand.BuildDError("error: failed to create a CSVReader.").AddCause(err).Build()
-		}
-
-		defer rd.Close(ctx)
-
+	case "psv":
+		csvInfo.SetDelim("|")
 	default:
-		return nil, errhand.BuildDError("error: unsupported file type '%s'", args.fileType).Build()
+		return nil, errhand.BuildDError("error: unsupported file type '%s'", impOpts.fileType).Build()
 	}
 
-	sch, err := actions.InferSchemaFromTableReader(ctx, rd, pkCols, args.inferArgs)
+	f, err := os.Open(impOpts.fileName)
+
+	if err != nil {
+		return nil, errhand.BuildDError("error: failed to open '%s'", impOpts.fileName).Build()
+	}
+
+	defer f.Close()
+
+	rd, err = csv.NewCSVReader(nbf, f, csvInfo)
+
+	if err != nil {
+		return nil, errhand.BuildDError("error: failed to create a CSVReader.").AddCause(err).Build()
+	}
+
+	defer rd.Close(ctx)
+
+	infCols, err := actions.InferColumnTypesFromTableReader(ctx, root, rd, impOpts)
 
 	if err != nil {
 		return nil, errhand.BuildDError("error: failed to infer schema").AddCause(err).Build()
 	}
 
-	return sch, nil
+	return CombineColCollections(ctx, root, infCols, impOpts)
+}
+
+func CombineColCollections(ctx context.Context, root *doltdb.RootValue, inferredCols *schema.ColCollection, impOpts *importOptions) (schema.Schema, errhand.VerboseError) {
+	existingCols := impOpts.existingSch.GetAllCols()
+
+	// oldCols is the subset of existingCols that will be kept in the new schema
+	var oldCols *schema.ColCollection
+	// newCols is the subset of inferredCols that will be added to the new schema
+	var newCols *schema.ColCollection
+
+	var verr errhand.VerboseError
+	switch impOpts.op {
+	case CreateOp:
+		oldCols = schema.EmptyColColl
+		newCols = columnsForSchemaCreate(inferredCols, impOpts.PkCols)
+	case UpdateOp:
+		oldCols, newCols, verr = columnsForSchemaUpdate(existingCols, inferredCols, impOpts.keepTypes)
+	case ReplaceOp:
+		oldCols, newCols, verr = columnsForSchemaReplace(existingCols, inferredCols, impOpts.keepTypes)
+	}
+
+	if verr != nil {
+		return nil, verr
+	}
+
+	newCols, err := root.GenerateTagsForNewColColl(ctx, impOpts.tableName, newCols)
+	if err != nil {
+		return nil, errhand.BuildDError("failed to generate new schema").AddCause(err).Build()
+	}
+
+	combined, err := oldCols.AppendColl(newCols)
+	if err != nil {
+		return nil, errhand.BuildDError("failed to generate new schema").AddCause(err).Build()
+	}
+
+	return schema.SchemaFromCols(combined), nil
+}
+
+func columnsForSchemaCreate(inferredCols *schema.ColCollection, pkNames []string) (newCols *schema.ColCollection) {
+	pks := set.NewStrSet(pkNames)
+	newCols, _ = schema.MapColCollection(inferredCols, func(col schema.Column) (schema.Column, error) {
+		col.IsPartOfPK = pks.Contains(col.Name)
+		return col, nil
+	})
+	return newCols
+}
+
+func columnsForSchemaUpdate(existingCols, inferredCols *schema.ColCollection, keepTypes bool) (oldCols, newCols *schema.ColCollection, verr errhand.VerboseError) {
+	ecn := set.NewStrSet(existingCols.GetColumnNames())
+	icn := set.NewStrSet(inferredCols.GetColumnNames())
+
+	// (L - R), (L ∩ R), (R - L)
+	left, inter, right := ecn.LeftIntersectionRight(icn)
+
+	// intersection columns with the same types are added to oldCols
+	sameType := set.NewStrSet(nil)
+	inter.Iterate(func(colName string) (cont bool) {
+		ec, _ := existingCols.GetByName(colName)
+		ic, _ := inferredCols.GetByName(colName)
+		if ec.TypeInfo.Equals(ic.TypeInfo) {
+			sameType.Add(colName)
+		}
+		return true
+	})
+
+	if keepTypes {
+		oldCols = existingCols
+		newCols, _ = schema.FilterColCollection(inferredCols, func(col schema.Column) (bool, error) {
+			return right.Contains(col.Name), nil
+		})
+	} else {
+		oldCols, _ = schema.FilterColCollection(existingCols, func(col schema.Column) (bool, error) {
+			return left.Contains(col.Name) || sameType.Contains(col.Name), nil
+		})
+		newCols, _ = schema.FilterColCollection(inferredCols, func(col schema.Column) (bool, error) {
+			return !sameType.Contains(col.Name), nil
+		})
+	}
+
+	verr = verifyPKsUnchanged(existingCols, oldCols, newCols)
+	if verr != nil {
+		return nil, nil, verr
+	}
+
+	return oldCols, newCols, nil
+}
+
+func columnsForSchemaReplace(existingCols, inferredCols *schema.ColCollection, keepTypes bool) (oldCols, newCols *schema.ColCollection, verr errhand.VerboseError) {
+	ecn := set.NewStrSet(existingCols.GetColumnNames())
+	icn := set.NewStrSet(inferredCols.GetColumnNames())
+
+	// (L - R), (L ∩ R), (R - L)
+	_, inter, right := ecn.LeftIntersectionRight(icn)
+
+	// intersection columns with the same types are added to oldCols
+	sameType := set.NewStrSet(nil)
+	inter.Iterate(func(colName string) (cont bool) {
+		ec, _ := existingCols.GetByName(colName)
+		ic, _ := inferredCols.GetByName(colName)
+		if ec.TypeInfo.Equals(ic.TypeInfo) {
+			sameType.Add(colName)
+		}
+		return true
+	})
+
+	if keepTypes {
+		oldCols, _ = schema.FilterColCollection(existingCols, func(col schema.Column) (bool, error) {
+			return inter.Contains(col.Name), nil
+		})
+		newCols, _ = schema.FilterColCollection(inferredCols, func(col schema.Column) (bool, error) {
+			return right.Contains(col.Name), nil
+		})
+	} else {
+		oldCols, _ = schema.FilterColCollection(existingCols, func(col schema.Column) (bool, error) {
+			return sameType.Contains(col.Name), nil
+		})
+		newCols, _ = schema.FilterColCollection(inferredCols, func(col schema.Column) (bool, error) {
+			return !sameType.Contains(col.Name), nil
+		})
+	}
+
+	verr = verifyPKsUnchanged(existingCols, oldCols, newCols)
+	if verr != nil {
+		return nil, nil, verr
+	}
+
+	return oldCols, newCols, nil
+}
+
+func verifyPKsUnchanged(existingCols, oldCols, newCols *schema.ColCollection) errhand.VerboseError {
+	err := newCols.Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
+		if col.IsPartOfPK {
+			return true, fmt.Errorf("Cannot add primary keys using schema import")
+		}
+		return false, nil
+	})
+	if err != nil {
+		return errhand.VerboseErrorFromError(err)
+	}
+
+	existingPKs, _ := schema.FilterColCollection(existingCols, func(col schema.Column) (b bool, err error) {
+		return col.IsPartOfPK, nil
+	})
+	newPKs, _ := schema.FilterColCollection(oldCols, func(col schema.Column) (b bool, err error) {
+		return col.IsPartOfPK, nil
+	})
+	if !schema.ColCollsAreEqual(existingPKs, newPKs) {
+		return errhand.BuildDError("input primary keys do not match primary keys of existing table").Build()
+	}
+
+	return nil
 }

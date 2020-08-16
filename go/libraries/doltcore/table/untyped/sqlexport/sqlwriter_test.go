@@ -47,7 +47,7 @@ func TestEndToEnd(t *testing.T) {
 	id := uuid.MustParse("00000000-0000-0000-0000-000000000000")
 	tableName := "people"
 
-	dropCreateStatement := sqlfmt.DropTableIfExistsStmt(tableName) + "\n" + sqlfmt.SchemaAsCreateStmt(tableName, dtestutils.TypedSchema)
+	dropCreateStatement := sqlfmt.DropTableIfExistsStmt(tableName) + "\n" + sqlfmt.CreateTableStmtWithTags(tableName, dtestutils.TypedSchema, nil, nil)
 
 	type test struct {
 		name           string
@@ -65,9 +65,9 @@ func TestEndToEnd(t *testing.T) {
 			sch: dtestutils.TypedSchema,
 			expectedOutput: dropCreateStatement + "\n" +
 				"INSERT INTO `people` (`id`,`name`,`age`,`is_married`,`title`) " +
-				`VALUES ("00000000-0000-0000-0000-000000000000","some guy",100,FALSE,"normie");` + "\n" +
+				`VALUES ('00000000-0000-0000-0000-000000000000','some guy',100,FALSE,'normie');` + "\n" +
 				"INSERT INTO `people` (`id`,`name`,`age`,`is_married`,`title`) " +
-				`VALUES ("00000000-0000-0000-0000-000000000000","guy personson",0,TRUE,"officially a person");` + "\n",
+				`VALUES ('00000000-0000-0000-0000-000000000000','guy personson',0,TRUE,'officially a person');` + "\n",
 		},
 		{
 			name:           "no rows",

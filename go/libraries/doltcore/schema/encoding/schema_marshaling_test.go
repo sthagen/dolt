@@ -21,9 +21,9 @@ import (
 	"testing"
 
 	"github.com/liquidata-inc/go-mysql-server/sql"
+	"github.com/liquidata-inc/vitess/go/sqltypes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"vitess.io/vitess/go/sqltypes"
 
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
@@ -43,7 +43,7 @@ func createTestSchema() schema.Schema {
 
 	colColl, _ := schema.NewColCollection(columns...)
 	sch := schema.SchemaFromCols(colColl)
-
+	_, _ = sch.Indexes().AddIndexByColTags("idx_age", []uint64{3}, schema.IndexProperties{IsUnique: false, Comment: ""})
 	return sch
 }
 
@@ -94,25 +94,6 @@ func TestNomsMarshalling(t *testing.T) {
 		t.Error("Value different after marshalling and unmarshalling.")
 	}
 
-}
-
-func TestJSONMarshalling(t *testing.T) {
-	tSchema := createTestSchema()
-	jsonStr, err := MarshalAsJson(tSchema)
-
-	if err != nil {
-		t.Fatal("Failed to marshal Schema as a types.Value.")
-	}
-
-	jsonUnmarshalled, err := UnmarshalJson(jsonStr)
-
-	if err != nil {
-		t.Fatal("Failed to unmarshal types.Value as Schema")
-	}
-
-	if !reflect.DeepEqual(tSchema, jsonUnmarshalled) {
-		t.Error("Value different after marshalling and unmarshalling.")
-	}
 }
 
 func TestTypeInfoMarshalling(t *testing.T) {
@@ -226,8 +207,17 @@ type testEncodedColumn struct {
 	Constraints []encodedConstraint `noms:"col_constraints" json:"col_constraints"`
 }
 
+type testEncodedIndex struct {
+	Name    string   `noms:"name" json:"name"`
+	Tags    []uint64 `noms:"tags" json:"tags"`
+	Comment string   `noms:"comment" json:"comment"`
+	Unique  bool     `noms:"unique" json:"unique"`
+	Hidden  bool     `noms:"hidden,omitempty" json:"hidden,omitempty"`
+}
+
 type testSchemaData struct {
-	Columns []testEncodedColumn `noms:"columns" json:"columns"`
+	Columns         []testEncodedColumn `noms:"columns" json:"columns"`
+	IndexCollection []testEncodedIndex  `noms:"idxColl,omitempty" json:"idxColl,omitempty"`
 }
 
 func (tec testEncodedColumn) decodeColumn() (schema.Column, error) {
@@ -265,5 +255,14 @@ func (tsd testSchemaData) decodeSchema() (schema.Schema, error) {
 		return nil, err
 	}
 
-	return schema.SchemaFromCols(colColl), nil
+	sch := schema.SchemaFromCols(colColl)
+
+	for _, encodedIndex := range tsd.IndexCollection {
+		_, err = sch.Indexes().AddIndexByColTags(encodedIndex.Name, encodedIndex.Tags, schema.IndexProperties{IsUnique: encodedIndex.Unique, Comment: encodedIndex.Comment})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return sch, nil
 }

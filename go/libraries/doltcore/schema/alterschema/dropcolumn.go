@@ -17,6 +17,7 @@ package alterschema
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
@@ -26,7 +27,7 @@ import (
 )
 
 // DropColumn drops a column from a table, and removes its associated cell values
-func DropColumn(ctx context.Context, tbl *doltdb.Table, colName string) (*doltdb.Table, error) {
+func DropColumn(ctx context.Context, tbl *doltdb.Table, colName string, foreignKeys []doltdb.ForeignKey) (*doltdb.Table, error) {
 	if tbl == nil {
 		panic("invalid parameters")
 	}
@@ -48,6 +49,30 @@ func DropColumn(ctx context.Context, tbl *doltdb.Table, colName string) (*doltdb
 		dropTag = col.Tag
 	}
 
+	for _, foreignKey := range foreignKeys {
+		for _, fkTag := range foreignKey.TableColumns {
+			if dropTag == fkTag {
+				return nil, fmt.Errorf("cannot drop column `%s` as it is used in foreign key `%d`", colName, dropTag)
+			}
+		}
+		for _, fkTag := range foreignKey.ReferencedTableColumns {
+			if dropTag == fkTag {
+				return nil, fmt.Errorf("cannot drop column `%s` as it is used in foreign key `%d`", colName, dropTag)
+			}
+		}
+	}
+
+	for _, index := range tblSch.Indexes().IndexesWithColumn(colName) {
+		_, err = tblSch.Indexes().RemoveIndex(index.Name())
+		if err != nil {
+			return nil, err
+		}
+		tbl, err = tbl.DeleteIndexRowData(ctx, index.Name())
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	cols := make([]schema.Column, 0)
 	err = allCols.Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
 		if col.Name != colName {
@@ -66,6 +91,7 @@ func DropColumn(ctx context.Context, tbl *doltdb.Table, colName string) (*doltdb
 	}
 
 	newSch := schema.SchemaFromCols(colColl)
+	newSch.Indexes().AddIndex(tblSch.Indexes().AllIndexes()...)
 
 	vrw := tbl.ValueReadWriter()
 	schemaVal, err := encoding.MarshalSchemaAsNomsValue(ctx, vrw, newSch)
@@ -82,7 +108,11 @@ func DropColumn(ctx context.Context, tbl *doltdb.Table, colName string) (*doltdb
 		return nil, err
 	}
 
-	newTable, err := doltdb.NewTable(ctx, vrw, schemaVal, prunedRowData)
+	indexData, err := tbl.GetIndexData(ctx)
+	if err != nil {
+		return nil, err
+	}
+	newTable, err := doltdb.NewTable(ctx, vrw, schemaVal, prunedRowData, &indexData)
 
 	if err != nil {
 		return nil, err

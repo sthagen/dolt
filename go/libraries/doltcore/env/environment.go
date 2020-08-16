@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019-2020 Liquidata, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -33,6 +32,7 @@ import (
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/creds"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
+	"github.com/liquidata-inc/dolt/go/libraries/doltcore/grpcendpoint"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/ref"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
@@ -104,7 +104,7 @@ func Load(ctx context.Context, hdp HomeDirProvider, fs filesys.Filesys, urlStr, 
 
 	if dbLoadErr == nil && dEnv.HasDoltDir() {
 		if !dEnv.HasDoltTempTableDir() {
-			err := os.Mkdir(dEnv.TempTableFilesDir(), os.ModePerm)
+			err := dEnv.FS.MkDirs(dEnv.TempTableFilesDir())
 			dEnv.DBLoadError = err
 		} else {
 			// fire and forget cleanup routine.  Will delete as many old temp files as it can during the main commands execution.
@@ -281,6 +281,12 @@ func (dEnv *DoltEnv) createDirectories(dir string) (string, error) {
 		return "", fmt.Errorf("unable to make directory '%s', cause: %s", absDataDir, err.Error())
 	}
 
+	err = dEnv.FS.MkDirs(dEnv.TempTableFilesDir())
+
+	if err != nil {
+		return "", fmt.Errorf("unable to make directory '%s', cause: %s", dEnv.TempTableFilesDir(), err.Error())
+	}
+
 	return filepath.Join(absPath, dbfactory.DoltDir), nil
 }
 
@@ -302,7 +308,7 @@ func (dEnv *DoltEnv) InitDBAndRepoState(ctx context.Context, nbf *types.NomsBinF
 		return err
 	}
 
-	return dEnv.initializeRepoState(ctx)
+	return dEnv.InitializeRepoState(ctx)
 }
 
 // Inits the dolt DB of this environment with an empty commit at the time given and writes default docs to disk.
@@ -323,10 +329,10 @@ func (dEnv *DoltEnv) InitDBWithTime(ctx context.Context, nbf *types.NomsBinForma
 	return nil
 }
 
-// initializeRepoState writes a default repo state to disk, consisting of a master branch and current root hash value.
-func (dEnv *DoltEnv) initializeRepoState(ctx context.Context) error {
-	cs, _ := doltdb.NewCommitSpec("HEAD", doltdb.MasterBranch)
-	commit, _ := dEnv.DoltDB.Resolve(ctx, cs)
+// InitializeRepoState writes a default repo state to disk, consisting of a master branch and current root hash value.
+func (dEnv *DoltEnv) InitializeRepoState(ctx context.Context) error {
+	cs, _ := doltdb.NewCommitSpec(doltdb.MasterBranch)
+	commit, _ := dEnv.DoltDB.Resolve(ctx, cs, nil)
 
 	root, err := commit.GetRootValue()
 	if err != nil {
@@ -381,7 +387,7 @@ func (dEnv *DoltEnv) RepoStateWriter() RepoStateWriter {
 }
 
 func (dEnv *DoltEnv) HeadRoot(ctx context.Context) (*doltdb.RootValue, error) {
-	commit, err := dEnv.DoltDB.Resolve(ctx, dEnv.RepoState.CWBHeadSpec())
+	commit, err := dEnv.DoltDB.ResolveRef(ctx, dEnv.RepoState.CWBHeadRef())
 
 	if err != nil {
 		return nil, err
@@ -425,7 +431,7 @@ func (dEnv *DoltEnv) PutTableToWorking(ctx context.Context, rows types.Map, sch 
 		return ErrMarshallingSchema
 	}
 
-	tbl, err := doltdb.NewTable(ctx, vrw, schVal, rows)
+	tbl, err := doltdb.NewTable(ctx, vrw, schVal, rows, nil)
 
 	if err != nil {
 		return err
@@ -618,47 +624,40 @@ func (dEnv *DoltEnv) getUserAgentString() string {
 	return strings.Join(tokens, " ")
 }
 
-func (dEnv *DoltEnv) GrpcConnWithCreds(hostAndPort string, insecure bool, rpcCreds credentials.PerRPCCredentials) (*grpc.ClientConn, error) {
-	if strings.IndexRune(hostAndPort, ':') == -1 {
-		if insecure {
-			hostAndPort += ":80"
+func (dEnv *DoltEnv) GetGRPCDialParams(config grpcendpoint.Config) (string, []grpc.DialOption, error) {
+	endpoint := config.Endpoint
+	if strings.IndexRune(endpoint, ':') == -1 {
+		if config.Insecure {
+			endpoint += ":80"
 		} else {
-			hostAndPort += ":443"
+			endpoint += ":443"
 		}
 	}
 
-	var dialOpt grpc.DialOption
-	if insecure {
-		dialOpt = grpc.WithInsecure()
+	var opts []grpc.DialOption
+	if config.Insecure {
+		opts = append(opts, grpc.WithInsecure())
 	} else {
 		tc := credentials.NewTLS(&tls.Config{})
-		dialOpt = grpc.WithTransportCredentials(tc)
+		opts = append(opts, grpc.WithTransportCredentials(tc))
 	}
 
-	opts := []grpc.DialOption{
-		dialOpt,
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(128 * 1024 * 1024)),
-		grpc.WithUserAgent(dEnv.getUserAgentString()),
+	opts = append(opts, grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(128*1024*1024)))
+	opts = append(opts, grpc.WithUserAgent(dEnv.getUserAgentString()))
+
+	if config.Creds != nil {
+		opts = append(opts, grpc.WithPerRPCCredentials(config.Creds))
+	} else if config.WithEnvCreds {
+		rpcCreds, err := dEnv.getRPCCreds()
+		if err != nil {
+			return "", nil, err
+		}
+		if rpcCreds != nil {
+			opts = append(opts, grpc.WithPerRPCCredentials(rpcCreds))
+		}
 	}
 
-	if rpcCreds != nil {
-		opts = append(opts, grpc.WithPerRPCCredentials(rpcCreds))
-	}
-
-	conn, err := grpc.Dial(hostAndPort, opts...)
-
-	return conn, err
-}
-
-func (dEnv *DoltEnv) GrpcConn(hostAndPort string, insecure bool) (*grpc.ClientConn, error) {
-	rpcCreds, err := dEnv.getRPCCreds()
-
-	if err != nil {
-		return nil, err
-	}
-
-	return dEnv.GrpcConnWithCreds(hostAndPort, insecure, rpcCreds)
-
+	return endpoint, opts, nil
 }
 
 func (dEnv *DoltEnv) GetRemotes() (map[string]Remote, error) {
@@ -703,6 +702,10 @@ func (dEnv *DoltEnv) FindRef(ctx context.Context, refStr string) (ref.DoltRef, e
 	} else if hasRef {
 		return localRef, nil
 	} else {
+		if strings.HasPrefix(refStr, "remotes/") {
+			refStr = refStr[len("remotes/"):]
+		}
+
 		slashIdx := strings.IndexRune(refStr, '/')
 		if slashIdx > 0 {
 			remoteName := refStr[:slashIdx]
@@ -821,6 +824,21 @@ func (dEnv *DoltEnv) GetOneDocDetail(docName string) (doc doltdb.DocDetails, err
 		}
 	}
 	return doltdb.DocDetails{}, err
+}
+
+// WorkingRootWithDocs returns a copy of the working root that has been updated with the Dolt docs from the file system.
+func (dEnv *DoltEnv) WorkingRootWithDocs(ctx context.Context) (*doltdb.RootValue, error) {
+	dds, err := dEnv.GetAllValidDocDetails()
+	if err != nil {
+		return nil, err
+	}
+
+	wr, err := dEnv.WorkingRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return dEnv.GetUpdatedRootWithDocs(ctx, wr, dds)
 }
 
 // GetUpdatedRootWithDocs adds, updates or removes the `dolt_docs` table on the provided root. The table will be added or updated
@@ -1012,7 +1030,7 @@ func createDocsTableOnRoot(ctx context.Context, dEnv *DoltEnv, root *doltdb.Root
 			return nil, ErrMarshallingSchema
 		}
 
-		newDocsTbl, err := doltdb.NewTable(ctx, root.VRW(), schVal, *wr.GetMap())
+		newDocsTbl, err := doltdb.NewTable(ctx, root.VRW(), schVal, *wr.GetMap(), nil)
 		if err != nil {
 			return nil, err
 		}

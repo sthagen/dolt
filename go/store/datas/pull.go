@@ -48,6 +48,8 @@ const (
 	defaultBatchSize       = 1 << 12 // 4096 chunks
 )
 
+var ErrNoData = errors.New("no data")
+
 func makeProgTrack(progressCh chan PullProgress) func(moreDone, moreKnown, moreApproxBytesWritten uint64) {
 	var doneCount, knownCount, approxBytesWritten uint64
 	return func(moreDone, moreKnown, moreApproxBytesWritten uint64) {
@@ -67,6 +69,16 @@ func Clone(ctx context.Context, srcDB, sinkDB Database, eventCh chan<- TableFile
 
 	if !srcOK {
 		return errors.New("src db is not a Table File Store")
+	}
+
+	size, err := srcTS.Size(ctx)
+
+	if err != nil {
+		return err
+	}
+
+	if size == 0 {
+		return ErrNoData
 	}
 
 	sinkTS, sinkOK := sinkCS.(nbs.TableFileStore)
@@ -122,7 +134,7 @@ func clone(ctx context.Context, srcTS, sinkTS nbs.TableFileStore, eventCh chan<-
 	}
 
 	i := 0
-	download := func() error {
+	download := func(ctx context.Context) error {
 		var err error
 		for i < len(desiredFiles) {
 			fileID := desiredFiles[i]
@@ -135,7 +147,7 @@ func clone(ctx context.Context, srcTS, sinkTS nbs.TableFileStore, eventCh chan<-
 
 			err = func() (err error) {
 				var rd io.ReadCloser
-				rd, err = tblFile.Open()
+				rd, err = tblFile.Open(ctx)
 
 				if err != nil {
 					return err
@@ -200,7 +212,7 @@ func clone(ctx context.Context, srcTS, sinkTS nbs.TableFileStore, eventCh chan<-
 	// keep going as long as progress is being made.  If progress is not made retry up to maxAttempts times.
 	for failureCount < maxAttempts {
 		initialIdx := i
-		err = download()
+		err = download(ctx)
 
 		if err == nil {
 			break

@@ -44,7 +44,7 @@ func (a StageAll) CommandString() string { return "stage_all" }
 
 // Exec executes a StageAll command on a test dolt environment.
 func (a StageAll) Exec(t *testing.T, dEnv *env.DoltEnv) error {
-	return actions.StageAllTables(context.Background(), dEnv, false)
+	return actions.StageAllTables(context.Background(), dEnv)
 }
 
 type CommitStaged struct {
@@ -56,7 +56,12 @@ func (c CommitStaged) CommandString() string { return fmt.Sprintf("commit_staged
 
 // Exec executes a CommitStaged command on a test dolt environment.
 func (c CommitStaged) Exec(t *testing.T, dEnv *env.DoltEnv) error {
-	return actions.CommitStaged(context.Background(), dEnv, c.Message, time.Now(), false)
+	return actions.CommitStaged(context.Background(), dEnv, actions.CommitStagedProps{
+		Message:          c.Message,
+		Date:             time.Now(),
+		AllowEmpty:       false,
+		CheckForeignKeys: true,
+	})
 }
 
 type CommitAll struct {
@@ -68,10 +73,15 @@ func (c CommitAll) CommandString() string { return fmt.Sprintf("commit: %s", c.M
 
 // Exec executes a CommitAll command on a test dolt environment.
 func (c CommitAll) Exec(t *testing.T, dEnv *env.DoltEnv) error {
-	err := actions.StageAllTables(context.Background(), dEnv, false)
+	err := actions.StageAllTables(context.Background(), dEnv)
 	require.NoError(t, err)
 
-	return actions.CommitStaged(context.Background(), dEnv, c.Message, time.Now(), false)
+	return actions.CommitStaged(context.Background(), dEnv, actions.CommitStagedProps{
+		Message:          c.Message,
+		Date:             time.Now(),
+		AllowEmpty:       false,
+		CheckForeignKeys: true,
+	})
 }
 
 type ResetHard struct{}
@@ -209,7 +219,7 @@ func (m Merge) Exec(t *testing.T, dEnv *env.DoltEnv) error {
 		assert.NoError(t, err)
 
 	} else {
-		mergedRoot, tblToStats, err := merge.MergeCommits(context.Background(), dEnv.DoltDB, cm1, cm2)
+		mergedRoot, tblToStats, err := merge.MergeCommits(context.Background(), cm1, cm2)
 		require.NoError(t, err)
 		for _, stats := range tblToStats {
 			require.True(t, stats.Conflicts == 0)
@@ -218,7 +228,7 @@ func (m Merge) Exec(t *testing.T, dEnv *env.DoltEnv) error {
 		h2, err := cm2.HashOf()
 		require.NoError(t, err)
 
-		err = dEnv.RepoState.StartMerge(dref, h2.String(), dEnv.FS)
+		err = dEnv.RepoState.StartMerge(h2.String(), dEnv.FS)
 		if err != nil {
 			return err
 		}
@@ -242,9 +252,9 @@ func (m Merge) Exec(t *testing.T, dEnv *env.DoltEnv) error {
 }
 
 func resolveCommit(t *testing.T, cSpecStr string, dEnv *env.DoltEnv) *doltdb.Commit {
-	cs, err := doltdb.NewCommitSpec(cSpecStr, dEnv.RepoState.Head.Ref.String())
+	cs, err := doltdb.NewCommitSpec(cSpecStr)
 	require.NoError(t, err)
-	cm, err := dEnv.DoltDB.Resolve(context.TODO(), cs)
+	cm, err := dEnv.DoltDB.Resolve(context.TODO(), cs, dEnv.RepoState.CWBHeadRef())
 	require.NoError(t, err)
 	return cm
 }

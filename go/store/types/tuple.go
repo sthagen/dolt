@@ -22,6 +22,7 @@
 package types
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
@@ -460,7 +461,8 @@ func (t Tuple) CountDifferencesBetweenTupleFields(other Tuple) (uint64, error) {
 	}
 
 	for i, v := range tMap {
-		if !v.Equals(otherMap[i]) {
+		ov, ok := otherMap[i]
+		if !ok || !v.Equals(ov) {
 			changed++
 		}
 	}
@@ -494,6 +496,12 @@ func (t Tuple) fieldsToMap() (map[Value]Value, error) {
 	}
 
 	return valMap, nil
+}
+
+func (t Tuple) StartsWith(otherTuple Tuple) bool {
+	tplDec, _ := t.decoderSkipToFields()
+	otherDec, _ := otherTuple.decoderSkipToFields()
+	return bytes.HasPrefix(tplDec.buff[tplDec.offset:], otherDec.buff[otherDec.offset:])
 }
 
 func (t Tuple) readFrom(nbf *NomsBinFormat, b *binaryNomsReader) (Value, error) {

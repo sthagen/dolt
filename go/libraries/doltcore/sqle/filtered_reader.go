@@ -75,7 +75,7 @@ func getSetForKeyColumn(nbf *types.NomsBinFormat, col schema.Column, filter sql.
 	case *expression.LessThanOrEqual:
 		lteOp := expreval.LessEqualOp{NBF: nbf}
 		return setForComparisonExp(nbf, col, typedExpr.BinaryExpression, lteOp, setForLteOp)
-	case *expression.In:
+	case *expression.InTuple:
 		return setForInExp(nbf, col, typedExpr.BinaryExpression)
 		// case *expression.Subquery:
 	}
@@ -354,7 +354,11 @@ func rangeForInterval(nbf *types.NomsBinFormat, tag types.Uint, in setalgebra.In
 		reverse = true
 
 		var err error
-		startKey, err = types.NewTuple(nbf, tag, in.Start.Val)
+		if inclusive {
+			startKey, err = types.NewTuple(nbf, tag, in.End.Val, types.Uint(uint64(0xffffffffffffffff)))
+		} else {
+			startKey, err = types.NewTuple(nbf, tag, in.End.Val)
+		}
 
 		if err != nil {
 			return nil, err

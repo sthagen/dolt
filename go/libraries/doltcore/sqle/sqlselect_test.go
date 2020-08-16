@@ -30,7 +30,6 @@ import (
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
 	. "github.com/liquidata-inc/dolt/go/libraries/doltcore/sql/sqltestutil"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/table/untyped/resultset"
 	"github.com/liquidata-inc/dolt/go/store/types"
 )
 
@@ -351,16 +350,16 @@ var BasicSelectTests = []SelectTest{
 		ExpectedSchema: CompressSchema(PeopleTestSchema),
 	},
 	{
-		Name:            "select *, in clause, mixed types",
-		Query:           "select * from people where first_name in ('Homer', 40)",
-		ExpectedErr:     "Type mismatch: mixed types in list literal '('Homer', 40)'",
-		SkipOnSqlEngine: true,
+		Name:           "select *, in clause, mixed types",
+		Query:          "select * from people where first_name in ('Homer', 40)",
+		ExpectedSchema: CompressSchema(PeopleTestSchema),
+		ExpectedRows:   ToSqlRows(PeopleTestSchema, Homer),
 	},
 	{
-		Name:            "select *, in clause, mixed numeric types",
-		Query:           "select * from people where age in (-10.0, 40)",
-		ExpectedErr:     "Type mismatch: mixed types in list literal '(-10.0, 40)'",
-		SkipOnSqlEngine: true,
+		Name:           "select *, in clause, mixed numeric types",
+		Query:          "select * from people where age in (-10.0, 40)",
+		ExpectedSchema: CompressSchema(PeopleTestSchema),
+		ExpectedRows:   ToSqlRows(PeopleTestSchema, Homer, Barney),
 	},
 	{
 		Name:           "select *, not in clause",
@@ -375,10 +374,10 @@ var BasicSelectTests = []SelectTest{
 		ExpectedSchema: CompressSchema(PeopleTestSchema),
 	},
 	{
-		Name:            "select *, in clause single type mismatch",
-		Query:           "select * from people where first_name in (1.0)",
-		ExpectedErr:     "Type mismatch:",
-		SkipOnSqlEngine: true,
+		Name:           "select *, in clause single type mismatch",
+		Query:          "select * from people where first_name in (1.0)",
+		ExpectedRows:   ToSqlRows(PeopleTestSchema),
+		ExpectedSchema: CompressSchema(PeopleTestSchema),
 	},
 	{
 		Name:           "select *, is null clause ",
@@ -417,10 +416,10 @@ var BasicSelectTests = []SelectTest{
 		ExpectedSchema: CompressSchema(PeopleTestSchema),
 	},
 	{
-		Name:            "select *, is true clause on non-bool column",
-		Query:           "select * from people where age is true",
-		ExpectedErr:     "Type mismatch:",
-		SkipOnSqlEngine: true,
+		Name:           "select *, is true clause on non-bool column",
+		Query:          "select * from people where age is true",
+		ExpectedRows:   ToSqlRows(PeopleTestSchema, AllPeopleRows...),
+		ExpectedSchema: CompressSchema(PeopleTestSchema),
 	},
 	{
 		Name:           "binary expression in select",
@@ -461,7 +460,7 @@ var BasicSelectTests = []SelectTest{
 		Query:           "select -age as age from people where is_married order by people.age",
 		ExpectedRows:    ToSqlRows(NewResultSetSchema("age", types.IntKind), NewResultSetRow(types.Int(-38)), NewResultSetRow(types.Int(-40))),
 		ExpectedSchema:  NewResultSetSchema("age", types.IntKind),
-		SkipOnSqlEngine: true,
+		SkipOnSqlEngine: true, // this seems to be a bug in the engine
 	},
 	{
 		Name:           "select *, -column",
@@ -470,10 +469,10 @@ var BasicSelectTests = []SelectTest{
 		ExpectedSchema: CompressSchema(PeopleTestSchema),
 	},
 	{
-		Name:            "select *, -column, string type",
-		Query:           "select * from people where -first_name = 'Homer'",
-		ExpectedErr:     "Unsupported type for unary - operation: varchar",
-		SkipOnSqlEngine: true,
+		Name:           "select *, -column, string type",
+		Query:          "select * from people where -first_name = 'Homer'",
+		ExpectedSchema: CompressSchema(PeopleTestSchema),
+		ExpectedRows:   ToSqlRows(PeopleTestSchema, AllPeopleRows...), // A little weird, but correct due to mysql type conversion rules (both expression evaluate to 0 after conversion)
 	},
 	{
 		Name:           "select *, binary + in where",
@@ -506,41 +505,35 @@ var BasicSelectTests = []SelectTest{
 		ExpectedSchema: CompressSchema(PeopleTestSchema),
 	},
 	{
-		Name:            "select *, complex binary expr in where",
-		Query:           "select * from people where age / 4 + 2 * 2 = 14",
-		ExpectedRows:    ToSqlRows(PeopleTestSchema, Homer, Barney),
-		ExpectedSchema:  CompressSchema(PeopleTestSchema),
-		SkipOnSqlEngine: true,
+		Name:           "select *, complex binary expr in where",
+		Query:          "select * from people where age / 4 + 2 * 2 = 14",
+		ExpectedRows:   ToSqlRows(PeopleTestSchema, Homer, Barney),
+		ExpectedSchema: CompressSchema(PeopleTestSchema),
 	},
 	{
-		Name:            "select *, binary + in where type mismatch",
-		Query:           "select * from people where first_name + 1 = 41",
-		ExpectedErr:     "Type mismatch evaluating expression 'first_name + 1'",
-		SkipOnSqlEngine: true,
+		Name:        "select *, binary + in where type mismatch",
+		Query:       "select * from people where first_name + 1 = 41",
+		ExpectedErr: "Type mismatch evaluating expression 'first_name + 1'",
 	},
 	{
-		Name:            "select *, binary - in where type mismatch",
-		Query:           "select * from people where first_name - 1 = 39",
-		ExpectedErr:     "Type mismatch evaluating expression 'first_name - 1'",
-		SkipOnSqlEngine: true,
+		Name:        "select *, binary - in where type mismatch",
+		Query:       "select * from people where first_name - 1 = 39",
+		ExpectedErr: "Type mismatch evaluating expression 'first_name - 1'",
 	},
 	{
-		Name:            "select *, binary / in where type mismatch",
-		Query:           "select * from people where first_name / 2 = 20",
-		ExpectedErr:     "Type mismatch evaluating expression 'first_name / 2'",
-		SkipOnSqlEngine: true,
+		Name:        "select *, binary / in where type mismatch",
+		Query:       "select * from people where first_name / 2 = 20",
+		ExpectedErr: "Type mismatch evaluating expression 'first_name / 2'",
 	},
 	{
-		Name:            "select *, binary * in where type mismatch",
-		Query:           "select * from people where first_name * 2 = 80",
-		ExpectedErr:     "Type mismatch evaluating expression 'first_name * 2'",
-		SkipOnSqlEngine: true,
+		Name:        "select *, binary * in where type mismatch",
+		Query:       "select * from people where first_name * 2 = 80",
+		ExpectedErr: "Type mismatch evaluating expression 'first_name * 2'",
 	},
 	{
-		Name:            "select *, binary % in where type mismatch",
-		Query:           "select * from people where first_name % 4 = 0",
-		ExpectedErr:     "Type mismatch evaluating expression 'first_name % 4'",
-		SkipOnSqlEngine: true,
+		Name:        "select *, binary % in where type mismatch",
+		Query:       "select * from people where first_name % 4 = 0",
+		ExpectedErr: "Type mismatch evaluating expression 'first_name % 4'",
 	},
 	{
 		Name:           "select * with where, order by",
@@ -576,54 +569,51 @@ var BasicSelectTests = []SelectTest{
 		},
 		ExpectedSchema: NewResultSetSchema("first_name", types.StringKind, "first_name", types.StringKind),
 	},
-
-	// TODO: fix this. To make this work we need to track selected tables along with their aliases. It's not an error to
-	//  select the same table multiple times, as long as each occurrence has a unique name
-	// {
-	// 	name:        "duplicate table selection",
-	// 	query:       "select first_name as f, last_name as f from people, people where age >= 40",
-	// 	expectedErr: "Non-unique table name / alias: 'people'",
-	// },
 	{
-		Name:            "duplicate table alias",
-		Query:           "select * from people p, people p where age >= 40",
-		ExpectedErr:     "Non-unique table name / alias: 'p'",
-		SkipOnSqlEngine: true,
+		Name:            "duplicate table selection",
+		Query:           "select first_name as f, last_name as f from people, people where age >= 40",
+		ExpectedErr:     "Non-unique table name / alias: people",
+		SkipOnSqlEngine: true, // this should be an error (table name selected twice without an alias)
+	},
+	{
+		Name:        "duplicate table alias",
+		Query:       "select * from people p, people p where age >= 40",
+		ExpectedErr: "Non-unique table name / alias: 'p'",
 	},
 	{
 		Name:            "column aliases in where clause",
 		Query:           `select first_name as f, last_name as l from people where f = "Homer"`,
 		ExpectedErr:     "Unknown column: 'f'",
-		SkipOnSqlEngine: true,
+		SkipOnSqlEngine: true, // this is actually a bug (aliases aren't usable in filters)
 	},
 	{
 		Name:           "select subset of columns with order by",
 		Query:          "select first_name from people order by age, first_name",
-		ExpectedRows:   ToSqlRows(resultset.SubsetSchema(PeopleTestSchema, "first_name"), Lisa, Bart, Marge, Barney, Homer, Moe),
+		ExpectedRows:   ToSqlRows(SubsetSchema(PeopleTestSchema, "first_name"), Lisa, Bart, Marge, Barney, Homer, Moe),
 		ExpectedSchema: CompressSchema(PeopleTestSchema, "first_name"),
 	},
 	{
 		Name:           "column aliases with order by",
 		Query:          "select first_name as f from people order by age, f",
-		ExpectedRows:   ToSqlRows(resultset.SubsetSchema(PeopleTestSchema, "first_name"), Lisa, Bart, Marge, Barney, Homer, Moe),
+		ExpectedRows:   ToSqlRows(SubsetSchema(PeopleTestSchema, "first_name"), Lisa, Bart, Marge, Barney, Homer, Moe),
 		ExpectedSchema: NewResultSetSchema("f", types.StringKind),
 	},
 	{
 		Name:            "ambiguous column in order by",
 		Query:           "select first_name as f, last_name as f from people order by f",
 		ExpectedErr:     "Ambiguous column: 'f'",
-		SkipOnSqlEngine: true,
+		SkipOnSqlEngine: true, // this is a bug in go-mysql-server
 	},
 	{
 		Name:           "table aliases",
-		Query:          "select p.first_name as f, people.last_name as l from people p where p.first_name = 'Homer'",
-		ExpectedRows:   ToSqlRows(resultset.SubsetSchema(PeopleTestSchema, "first_name", "last_name"), Homer),
+		Query:          "select p.first_name as f, p.last_name as l from people p where p.first_name = 'Homer'",
+		ExpectedRows:   ToSqlRows(SubsetSchema(PeopleTestSchema, "first_name", "last_name"), Homer),
 		ExpectedSchema: NewResultSetSchema("f", types.StringKind, "l", types.StringKind),
 	},
 	{
 		Name:           "table aliases without column aliases",
-		Query:          "select p.first_name, people.last_name from people p where p.first_name = 'Homer'",
-		ExpectedRows:   ToSqlRows(resultset.SubsetSchema(PeopleTestSchema, "first_name", "last_name"), Homer),
+		Query:          "select p.first_name, p.last_name from people p where p.first_name = 'Homer'",
+		ExpectedRows:   ToSqlRows(SubsetSchema(PeopleTestSchema, "first_name", "last_name"), Homer),
 		ExpectedSchema: NewResultSetSchema("first_name", types.StringKind, "last_name", types.StringKind),
 	},
 	{
@@ -680,10 +670,15 @@ var BasicSelectTests = []SelectTest{
 		ExpectedErr: `Unknown table: 'dne'`,
 	},
 	{
-		Name:            "no table",
-		Query:           "select 1",
-		ExpectedErr:     `Selects without a table are not supported:`,
-		SkipOnSqlEngine: true, // not actually an error, just not supported by our implementation
+		Name:  "no table",
+		Query: "select 1",
+		ExpectedSqlSchema: sql.Schema{
+			&sql.Column{
+				Name: "1",
+				Type: sql.Int8,
+			},
+		},
+		ExpectedRows: []sql.Row{{int8(1)}},
 	},
 	{
 		Name:        "unknown column in where",
@@ -691,10 +686,9 @@ var BasicSelectTests = []SelectTest{
 		ExpectedErr: `Unknown column: 'dne'`,
 	},
 	{
-		Name:            "unknown column in order by",
-		Query:           "select * from people where rating > 8.0 order by dne",
-		ExpectedErr:     `Unknown column: 'dne'`,
-		SkipOnSqlEngine: true,
+		Name:        "unknown column in order by",
+		Query:       "select * from people where rating > 8.0 order by dne",
+		ExpectedErr: `Unknown column: 'dne'`,
 	},
 	{
 		Name:        "unsupported comparison",
@@ -702,17 +696,17 @@ var BasicSelectTests = []SelectTest{
 		ExpectedErr: "not supported",
 	},
 	{
-		Name:            "type mismatch in where clause",
-		Query:           `select * from people where id = "0"`,
-		ExpectedErr:     "Type mismatch:",
-		SkipOnSqlEngine: true,
+		Name:           "type mismatch in where clause",
+		Query:          `select * from people where id = "0"`,
+		ExpectedSchema: CompressSchema(PeopleTestSchema),
+		ExpectedRows:   ToSqlRows(PeopleTestSchema, Homer),
 	},
 	{
 		Name:  "select * from log system table",
 		Query: "select * from dolt_log",
 		ExpectedRows: []sql.Row{
 			{
-				"0e2b6g3oemme1je6g3l2bm3hr5mhgpa2",
+				"0o2rnf5pq2s1nq3hj3609e1lt0socuf1",
 				"billy bob",
 				"bigbillieb@fake.horse",
 				time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -728,12 +722,21 @@ var BasicSelectTests = []SelectTest{
 		},
 	},
 	{
+		Name:         "select * from conflicts system table",
+		Query:        "select * from dolt_conflicts",
+		ExpectedRows: []sql.Row{},
+		ExpectedSqlSchema: sql.Schema{
+			&sql.Column{Name: "table", Type: sql.Text},
+			&sql.Column{Name: "num_conflicts", Type: sql.Uint64},
+		},
+	},
+	{
 		Name:  "select * from branches system table",
 		Query: "select * from dolt_branches",
 		ExpectedRows: []sql.Row{
 			{
 				"master",
-				"0e2b6g3oemme1je6g3l2bm3hr5mhgpa2",
+				"0o2rnf5pq2s1nq3hj3609e1lt0socuf1",
 				"billy bob", "bigbillieb@fake.horse",
 				time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC),
 				"Initialize data repository",
@@ -755,45 +758,44 @@ var sqlDiffSchema = sql.Schema{
 	&sql.Column{Name: "to_first_name", Type: sql.LongText},
 	&sql.Column{Name: "to_last_name", Type: sql.LongText},
 	&sql.Column{Name: "to_addr", Type: sql.LongText},
-	&sql.Column{Name: "to_age_4", Type: sql.Int64},
-	&sql.Column{Name: "to_age_5", Type: sql.Uint64},
-	&sql.Column{Name: "to_commit", Type: sql.LongText},
 	&sql.Column{Name: "from_id", Type: sql.Int64},
 	&sql.Column{Name: "from_first_name", Type: sql.LongText},
 	&sql.Column{Name: "from_last_name", Type: sql.LongText},
 	&sql.Column{Name: "from_addr", Type: sql.LongText},
-	&sql.Column{Name: "from_age_4", Type: sql.Int64},
-	&sql.Column{Name: "from_age_5", Type: sql.Uint64},
-	&sql.Column{Name: "from_commit", Type: sql.LongText},
 	&sql.Column{Name: "diff_type", Type: sql.Text},
 }
 
 var SelectDiffTests = []SelectTest{
 	{
-		Name:  "select * from diff system table",
-		Query: "select * from dolt_diff_test_table",
+		Name:  "select from diff system table",
+		Query: "select to_id, to_first_name, to_last_name, to_addr, from_id, from_first_name, from_last_name, from_addr, diff_type from dolt_diff_test_table",
 		ExpectedRows: ToSqlRows(DiffSchema,
-			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(6), 1: types.String("Katie"), 2: types.String("McCulloch"), 13: types.String("current"), 6: types.String("HEAD"), 14: types.String("added")})),
+			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(6), 1: types.String("Katie"), 2: types.String("McCulloch"), 14: types.String("added")})),
+			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(0), 1: types.String("Aaron"), 2: types.String("Son"), 3: types.String("123 Fake St"), 7: types.Int(0), 8: types.String("Aaron"), 9: types.String("Son"), 10: types.String("123 Fake St"), 14: types.String("modified")})),
+			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(1), 1: types.String("Brian"), 2: types.String("Hendriks"), 3: types.String("456 Bull Ln"), 7: types.Int(1), 8: types.String("Brian"), 9: types.String("Hendriks"), 10: types.String("456 Bull Ln"), 14: types.String("modified")})),
+			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(2), 1: types.String("Tim"), 2: types.String("Sehn"), 3: types.String("789 Not Real Ct"), 7: types.Int(2), 8: types.String("Tim"), 9: types.String("Sehn"), 10: types.String("789 Not Real Ct"), 14: types.String("modified")})),
+			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(3), 1: types.String("Zach"), 2: types.String("Musgrave"), 3: types.String("-1 Imaginary Wy"), 7: types.Int(3), 8: types.String("Zach"), 9: types.String("Musgrave"), 14: types.String("modified")})),
+			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(5), 1: types.String("Daylon"), 2: types.String("Wilkins"), 14: types.String("added")})),
+			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(0), 1: types.String("Aaron"), 2: types.String("Son"), 3: types.String("123 Fake St"), 14: types.String("added")})),
+			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(1), 1: types.String("Brian"), 2: types.String("Hendriks"), 3: types.String("456 Bull Ln"), 14: types.String("added")})),
+			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(2), 1: types.String("Tim"), 2: types.String("Sehn"), 3: types.String("789 Not Real Ct"), 14: types.String("added")})),
+			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(3), 1: types.String("Zach"), 2: types.String("Musgrave"), 14: types.String("added")})),
+			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(4), 1: types.String("Matt"), 2: types.String("Jesuele"), 14: types.String("added")})),
 		),
 		ExpectedSqlSchema: sqlDiffSchema,
 	},
 	{
-		Name:  "select * from diff system table with from commit",
-		Query: "select * from dolt_diff_test_table where from_commit = 'add-age'",
+		Name:  "select from diff system table with to commit",
+		Query: "select to_id, to_first_name, to_last_name, to_addr, from_id, from_first_name, from_last_name, from_addr, diff_type from dolt_diff_test_table where to_commit = 'WORKING'",
 		ExpectedRows: ToSqlRows(DiffSchema,
-			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{7: types.Int(0), 8: types.String("Aaron"), 9: types.String("Son"), 11: types.Int(35), 0: types.Int(0), 1: types.String("Aaron"), 2: types.String("Son"), 3: types.String("123 Fake St"), 5: types.Uint(35), 13: types.String("add-age"), 6: types.String("HEAD"), 14: types.String("modified")})),
-			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{7: types.Int(1), 8: types.String("Brian"), 9: types.String("Hendriks"), 11: types.Int(38), 0: types.Int(1), 1: types.String("Brian"), 2: types.String("Hendriks"), 3: types.String("456 Bull Ln"), 5: types.Uint(38), 13: types.String("add-age"), 6: types.String("HEAD"), 14: types.String("modified")})),
-			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{7: types.Int(2), 8: types.String("Tim"), 9: types.String("Sehn"), 11: types.Int(37), 0: types.Int(2), 1: types.String("Tim"), 2: types.String("Sehn"), 3: types.String("789 Not Real Ct"), 5: types.Uint(37), 13: types.String("add-age"), 6: types.String("HEAD"), 14: types.String("modified")})),
-			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{7: types.Int(3), 8: types.String("Zach"), 9: types.String("Musgrave"), 11: types.Int(37), 0: types.Int(3), 1: types.String("Zach"), 2: types.String("Musgrave"), 3: types.String("-1 Imaginary Wy"), 5: types.Uint(37), 13: types.String("add-age"), 6: types.String("HEAD"), 14: types.String("modified")})),
-			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(4), 1: types.String("Matt"), 2: types.String("Jesuele"), 3: types.NullValue, 13: types.String("add-age"), 6: types.String("HEAD"), 14: types.String("added")})),
-			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(5), 1: types.String("Daylon"), 2: types.String("Wilkins"), 3: types.NullValue, 13: types.String("add-age"), 6: types.String("HEAD"), 14: types.String("added")})),
-			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(6), 1: types.String("Katie"), 2: types.String("McCulloch"), 13: types.String("add-age"), 6: types.String("HEAD"), 14: types.String("added")})),
+			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(6), 1: types.String("Katie"), 2: types.String("McCulloch"), 14: types.String("added")})),
 		),
 		ExpectedSqlSchema: sqlDiffSchema,
 	},
-	{
-		Name:  "select * from diff system table with from and to commit and test insensitive name",
-		Query: "select * from dolt_diff_TeSt_TaBlE where from_commit = 'add-age' and to_commit = 'master'",
+	// TODO: fix dependencies to hashof function can be registered and used here, also create branches when generating the history so that different from and to commits can be tested.
+	/*{
+		Name:  "select from diff system table with from and to commit and test insensitive name",
+		Query: "select to_id, to_first_name, to_last_name, to_addr, to_age_4, to_age_5, from_id, from_first_name, from_last_name, from_addr, from_age_4, from_age_5, diff_type from dolt_diff_TeSt_TaBlE where from_commit = 'add-age' and to_commit = 'master'",
 		ExpectedRows: ToSqlRows(DiffSchema,
 			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{7: types.Int(0), 8: types.String("Aaron"), 9: types.String("Son"), 11: types.Int(35), 0: types.Int(0), 1: types.String("Aaron"), 2: types.String("Son"), 3: types.String("123 Fake St"), 5: types.Uint(35), 13: types.String("add-age"), 6: types.String("master"), 14: types.String("modified")})),
 			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{7: types.Int(1), 8: types.String("Brian"), 9: types.String("Hendriks"), 11: types.Int(38), 0: types.Int(1), 1: types.String("Brian"), 2: types.String("Hendriks"), 3: types.String("456 Bull Ln"), 5: types.Uint(38), 13: types.String("add-age"), 6: types.String("master"), 14: types.String("modified")})),
@@ -803,7 +805,7 @@ var SelectDiffTests = []SelectTest{
 			mustRow(row.New(types.Format_7_18, DiffSchema, row.TaggedValues{0: types.Int(5), 1: types.String("Daylon"), 2: types.String("Wilkins"), 3: types.NullValue, 13: types.String("add-age"), 6: types.String("master"), 14: types.String("added")})),
 		),
 		ExpectedSqlSchema: sqlDiffSchema,
-	},
+	},*/
 }
 
 var AsOfTests = []SelectTest{
@@ -936,6 +938,10 @@ var AsOfTests = []SelectTest{
 }
 
 // SQL is supposed to be case insensitive. These are tests of that promise.
+// Many of these are currently broken in go-myqsl-server. The queries return the correct results in all cases, but the
+// column names in the result schemas often have the wrong case. They sometimes use the case from the table, rather
+// than the case of the expression in the query (the correct behavior). This is a minor issue, but we should fix it
+// eventually.
 var CaseSensitivityTests = []SelectTest{
 	{
 		Name: "table name has mixed case, select lower case",
@@ -969,9 +975,10 @@ var CaseSensitivityTests = []SelectTest{
 		AdditionalSetup: CreateTableWithRowsFn("MiXeDcAsE",
 			NewSchema("test", types.StringKind),
 			[]types.Value{types.String("1")}),
-		Query:          "select mixedcAse.TeSt from MIXEDCASE",
-		ExpectedSchema: NewResultSetSchema("TeSt", types.StringKind),
-		ExpectedRows:   []sql.Row{{"1"}},
+		Query:           "select mixedcAse.TeSt from MIXEDCASE",
+		ExpectedSchema:  NewResultSetSchema("TeSt", types.StringKind),
+		ExpectedRows:    []sql.Row{{"1"}},
+		SkipOnSqlEngine: true,
 	},
 	{
 		Name: "table alias select *",
@@ -987,9 +994,10 @@ var CaseSensitivityTests = []SelectTest{
 		AdditionalSetup: CreateTableWithRowsFn("MiXeDcAsE",
 			NewSchema("test", types.StringKind),
 			[]types.Value{types.String("1")}),
-		Query:          "select mC.TeSt from MIXEDCASE as MC",
-		ExpectedSchema: NewResultSetSchema("TeSt", types.StringKind),
-		ExpectedRows:   []sql.Row{{"1"}},
+		Query:           "select mC.TeSt from MIXEDCASE as MC",
+		ExpectedSchema:  NewResultSetSchema("TeSt", types.StringKind),
+		ExpectedRows:    []sql.Row{{"1"}},
+		SkipOnSqlEngine: true,
 	},
 	{
 		Name: "multiple tables with the same case-insensitive name, exact match",
@@ -1002,15 +1010,6 @@ var CaseSensitivityTests = []SelectTest{
 		Query:          "select test from tableName",
 		ExpectedSchema: NewResultSetSchema("test", types.StringKind),
 		ExpectedRows:   []sql.Row{{"1"}},
-	},
-	{
-		Name: "multiple tables with the same case-insensitive name, no exact match",
-		AdditionalSetup: Compose(
-			CreateTableWithRowsFn("tableName", NewSchemaForTable("tableName1", "test", types.StringKind)),
-			CreateTableWithRowsFn("TABLENAME", NewSchemaForTable("tableName2", "test", types.StringKind)),
-		),
-		Query:       "select test from tablename",
-		ExpectedErr: "Ambiguous table: 'tablename'",
 	},
 	{
 		Name: "alias with same name as table",
@@ -1035,52 +1034,30 @@ var CaseSensitivityTests = []SelectTest{
 		AdditionalSetup: CreateTableWithRowsFn("test",
 			NewSchema("MiXeDcAsE", types.StringKind),
 			[]types.Value{types.String("1")}),
-		Query:          "select mixedcase from test",
-		ExpectedSchema: NewResultSetSchema("mixedcase", types.StringKind),
-		ExpectedRows:   []sql.Row{{"1"}},
+		Query:           "select mixedcase from test",
+		ExpectedSchema:  NewResultSetSchema("mixedcase", types.StringKind),
+		ExpectedRows:    []sql.Row{{"1"}},
+		SkipOnSqlEngine: true,
 	},
 	{
 		Name: "column name has mixed case, select upper case",
 		AdditionalSetup: CreateTableWithRowsFn("test",
 			NewSchema("MiXeDcAsE", types.StringKind),
 			[]types.Value{types.String("1")}),
-		Query:          "select MIXEDCASE from test",
-		ExpectedSchema: NewResultSetSchema("MIXEDCASE", types.StringKind),
-		ExpectedRows:   []sql.Row{{"1"}},
+		Query:           "select MIXEDCASE from test",
+		ExpectedSchema:  NewResultSetSchema("MIXEDCASE", types.StringKind),
+		ExpectedRows:    []sql.Row{{"1"}},
+		SkipOnSqlEngine: true,
 	},
 	{
 		Name: "select with multiple matching columns, exact match",
 		AdditionalSetup: CreateTableWithRowsFn("test",
 			NewSchema("MiXeDcAsE", types.StringKind, "mixedcase", types.StringKind),
 			[]types.Value{types.String("1"), types.String("2")}),
-		Query:          "select mixedcase from test",
-		ExpectedSchema: NewResultSetSchema("mixedcase", types.StringKind),
-		ExpectedRows:   []sql.Row{{"1"}},
-	},
-	{
-		Name: "select with multiple matching columns, exact match #2",
-		AdditionalSetup: CreateTableWithRowsFn("test",
-			NewSchema("MiXeDcAsE", types.StringKind, "mixedcase", types.StringKind),
-			[]types.Value{types.String("1"), types.String("2")}),
-		Query:          "select MiXeDcAsE from test",
-		ExpectedSchema: NewResultSetSchema("MiXeDcAsE", types.StringKind),
-		ExpectedRows:   []sql.Row{{"1"}},
-	},
-	{
-		Name: "select with multiple matching columns, no exact match",
-		AdditionalSetup: CreateTableWithRowsFn("test",
-			NewSchema("MiXeDcAsE", types.StringKind, "mixedcase", types.StringKind),
-			[]types.Value{types.String("1"), types.String("2")}),
-		Query:       "select MIXEDCASE from test",
-		ExpectedErr: "Ambiguous column: 'MIXEDCASE'",
-	},
-	{
-		Name: "select with multiple matching columns, no exact match, table alias",
-		AdditionalSetup: CreateTableWithRowsFn("test",
-			NewSchema("MiXeDcAsE", types.StringKind, "mixedcase", types.StringKind),
-			[]types.Value{types.String("1"), types.String("2")}),
-		Query:       "select t.MIXEDCASE from test t",
-		ExpectedErr: "Ambiguous column: 'MIXEDCASE'",
+		Query:           "select mixedcase from test",
+		ExpectedSchema:  NewResultSetSchema("mixedcase", types.StringKind),
+		ExpectedRows:    []sql.Row{{"1"}},
+		SkipOnSqlEngine: true, // TODO: table should be illegal. field names cannot be the same case-insensitive
 	},
 	{
 		Name: "column is reserved word, select not backticked",
@@ -1113,9 +1090,10 @@ var CaseSensitivityTests = []SelectTest{
 		AdditionalSetup: CreateTableWithRowsFn("test",
 			NewSchema("YeAr", types.StringKind),
 			[]types.Value{types.String("1")}),
-		Query:          "select Year from test",
-		ExpectedSchema: NewResultSetSchema("Year", types.StringKind),
-		ExpectedRows:   []sql.Row{{"1"}},
+		Query:           "select Year from test",
+		ExpectedSchema:  NewResultSetSchema("Year", types.StringKind),
+		ExpectedRows:    []sql.Row{{"1"}},
+		SkipOnSqlEngine: true,
 	},
 	{
 		Name: "column is reserved word, select backticked",
@@ -1126,9 +1104,10 @@ var CaseSensitivityTests = []SelectTest{
 				"or", types.StringKind,
 				"select", types.StringKind),
 			[]types.Value{types.String("1"), types.String("1.1"), types.String("aaa"), types.String("create")}),
-		Query:          "select `Timestamp` from test",
-		ExpectedRows:   []sql.Row{{"1"}},
-		ExpectedSchema: NewResultSetSchema("Timestamp", types.StringKind),
+		Query:           "select `Timestamp` from test",
+		ExpectedRows:    []sql.Row{{"1"}},
+		ExpectedSchema:  NewResultSetSchema("Timestamp", types.StringKind),
+		SkipOnSqlEngine: true,
 	},
 	{
 		Name: "column is reserved word, select backticked #2",
@@ -1145,7 +1124,8 @@ var CaseSensitivityTests = []SelectTest{
 			"OR", types.StringKind,
 			"SELect", types.StringKind,
 			"anD", types.StringKind),
-		ExpectedRows: []sql.Row{{"1", "aaa", "create", "1.1"}},
+		ExpectedRows:    []sql.Row{{"1", "aaa", "create", "1.1"}},
+		SkipOnSqlEngine: true,
 	},
 	{
 		Name: "column is reserved word, table qualified",
@@ -1156,13 +1136,14 @@ var CaseSensitivityTests = []SelectTest{
 				"or", types.StringKind,
 				"select", types.StringKind),
 			[]types.Value{types.String("1"), types.String("1.1"), types.String("aaa"), types.String("create")}),
-		Query: "select Year, test.OR, t.SELect, t.anD from test t",
+		Query: "select Year, t.OR, t.SELect, t.anD from test t",
 		ExpectedSchema: NewResultSetSchema(
 			"Year", types.StringKind,
 			"OR", types.StringKind,
 			"SELect", types.StringKind,
 			"anD", types.StringKind),
-		ExpectedRows: []sql.Row{{"1", "aaa", "create", "1.1"}},
+		ExpectedRows:    []sql.Row{{"1", "aaa", "create", "1.1"}},
+		SkipOnSqlEngine: true,
 	},
 }
 
@@ -1467,7 +1448,6 @@ func TestJoins(t *testing.T) {
 func TestCaseSensitivity(t *testing.T) {
 	for _, tt := range CaseSensitivityTests {
 		t.Run(tt.Name, func(t *testing.T) {
-			t.Skip("skipping case sensitivity tests until go-mysql-server is updated")
 			testSelectQuery(t, tt)
 		})
 	}
@@ -1591,10 +1571,10 @@ func testSelectDiffQuery(t *testing.T, test SelectTest) {
 		test.AdditionalSetup(t, dEnv)
 	}
 
-	cs, err := doltdb.NewCommitSpec("HEAD", "master")
+	cs, err := doltdb.NewCommitSpec("master")
 	require.NoError(t, err)
 
-	cm, err := dEnv.DoltDB.Resolve(ctx, cs)
+	cm, err := dEnv.DoltDB.Resolve(ctx, cs, nil)
 	require.NoError(t, err)
 
 	root, err := cm.GetRootValue()

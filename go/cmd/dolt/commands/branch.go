@@ -38,7 +38,7 @@ var branchForceFlagDesc = "Reset {{.LessThan}}branchname{{.GreaterThan}} to {{.L
 
 var branchDocs = cli.CommandDocumentationContent{
 	ShortDesc: `List, create, or delete branches`,
-	LongDesc: `If {{.EmphasisLeft}}--list{{.EmphasisRight}} is given, or if there are no non-option arguments, existing branches are listed; the current branch will be highlighted with an asterisk.
+	LongDesc: `If {{.EmphasisLeft}}--list{{.EmphasisRight}} is given, or if there are no non-option arguments, existing branches are listed. The current branch will be highlighted with an asterisk. With no options, only local branches are listed. With {{.EmphasisLeft}}-r{{.EmphasisRight}}, only remote branches are listed. With {{.EmphasisLeft}}-a{{.EmphasisRight}} both local and remote branches are listed. {{.EmphasisLeft}}-v{{.EmphasisRight}} causes the hash of the commit that the branches are at to be printed as well.
 
 The command's second form creates a new branch head named {{.LessThan}}branchname{{.GreaterThan}} which points to the current {{.EmphasisLeft}}HEAD{{.EmphasisRight}}, or {{.LessThan}}start-point{{.GreaterThan}} if given.
 
@@ -50,11 +50,11 @@ The {{.EmphasisLeft}}-c{{.EmphasisRight}} options have the exact same semantics 
 
 With a {{.EmphasisLeft}}-d{{.EmphasisRight}}, {{.LessThan}}branchname{{.GreaterThan}} will be deleted. You may specify more than one branch for deletion.`,
 	Synopsis: []string{
-		`[--list] [-v] [-a]`,
+		`[--list] [-v] [-a] [-r]`,
 		`[-f] {{.LessThan}}branchname{{.GreaterThan}} [{{.LessThan}}start-point{{.GreaterThan}}]`,
 		`-m [-f] [{{.LessThan}}oldbranch{{.GreaterThan}}] {{.LessThan}}newbranch{{.GreaterThan}}`,
 		`-c [-f] [{{.LessThan}}oldbranch{{.GreaterThan}}] {{.LessThan}}newbranch{{.GreaterThan}}`,
-		`-d [-f] {{.LessThan}}branchname{{.GreaterThan}}...`,
+		`-d [-f] [-r] {{.LessThan}}branchname{{.GreaterThan}}...`,
 	},
 }
 
@@ -67,6 +67,8 @@ const (
 	deleteForceFlag = "D"
 	verboseFlag     = "verbose"
 	allFlag         = "all"
+	remoteFlag      = "remote"
+	showCurrentFlag = "show-current"
 )
 
 type BranchCmd struct{}
@@ -98,6 +100,8 @@ func (cmd BranchCmd) createArgParser() *argparser.ArgParser {
 	ap.SupportsFlag(deleteForceFlag, "", "Shortcut for {{.EmphasisLeft}}--delete --force{{.EmphasisRight}}.")
 	ap.SupportsFlag(verboseFlag, "v", "When in list mode, show the hash and commit subject line for each head")
 	ap.SupportsFlag(allFlag, "a", "When in list mode, shows remote tracked branches")
+	ap.SupportsFlag(remoteFlag, "r", "When in list mode, show only remote tracked branches. When with -d, delete a remote tracking branch.")
+	ap.SupportsFlag(showCurrentFlag, "", "Print the name of the current branch")
 	return ap
 }
 
@@ -123,6 +127,8 @@ func (cmd BranchCmd) Exec(ctx context.Context, commandStr string, args []string,
 		return deleteForceBranches(ctx, dEnv, apr, usage)
 	case apr.Contains(listFlag):
 		return printBranches(ctx, dEnv, apr, usage)
+	case apr.Contains(showCurrentFlag):
+		return printCurrentBranch(dEnv)
 	case apr.NArg() > 0:
 		return createBranch(ctx, dEnv, apr, usage)
 	default:
@@ -134,6 +140,7 @@ func printBranches(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPar
 	branchSet := set.NewStrSet(apr.Args())
 
 	verbose := apr.Contains(verboseFlag)
+	printRemote := apr.Contains(remoteParam)
 	printAll := apr.Contains(allParam)
 
 	branches, err := dEnv.DoltDB.GetRefs(ctx)
@@ -152,9 +159,16 @@ func printBranches(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPar
 			continue
 		}
 
-		cs, _ := doltdb.NewCommitSpec("HEAD", branch.String())
+		cs, _ := doltdb.NewCommitSpec(branch.String())
 
-		if branch.GetType() != ref.BranchRefType && !printAll {
+		shouldPrint := false
+		switch branch.GetType() {
+		case ref.BranchRefType:
+			shouldPrint = printAll || !printRemote
+		case ref.RemoteRefType:
+			shouldPrint = printAll || printRemote
+		}
+		if !shouldPrint {
 			continue
 		}
 
@@ -170,7 +184,7 @@ func printBranches(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPar
 		}
 
 		if verbose {
-			cm, err := dEnv.DoltDB.Resolve(ctx, cs)
+			cm, err := dEnv.DoltDB.Resolve(ctx, cs, dEnv.RepoState.CWBHeadRef())
 
 			if err == nil {
 				h, err := cm.HashOf()
@@ -189,6 +203,11 @@ func printBranches(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPar
 		cli.Println(line)
 	}
 
+	return 0
+}
+
+func printCurrentBranch(dEnv *env.DoltEnv) int {
+	cli.Println(dEnv.RepoState.CWBHeadRef().GetPath())
 	return 0
 }
 
@@ -259,28 +278,33 @@ func deleteForceBranches(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.
 }
 
 func handleDeleteBranches(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgParseResults, usage cli.UsagePrinter, force bool) int {
-	if apr.NArg() != 1 {
+	if apr.NArg() == 0 {
 		usage()
 		return 1
 	}
+	for i := 0; i < apr.NArg(); i++ {
+		brName := apr.Arg(i)
 
-	brName := apr.Arg(0)
+		err := actions.DeleteBranch(ctx, dEnv, brName, actions.DeleteOptions{
+			Force:  force,
+			Remote: apr.Contains(remoteFlag),
+		})
 
-	err := actions.DeleteBranch(ctx, dEnv, brName, force)
-
-	var verr errhand.VerboseError
-	if err != nil {
-		if err == doltdb.ErrBranchNotFound {
-			verr = errhand.BuildDError("fatal: branch '%s' not found", brName).Build()
-		} else if err == actions.ErrCOBranchDelete {
-			verr = errhand.BuildDError("error: Cannot delete checked out branch '%s'", brName).Build()
-		} else {
-			bdr := errhand.BuildDError("fatal: Unexpected error deleting '%s'", brName)
-			verr = bdr.AddCause(err).Build()
+		if err != nil {
+			var verr errhand.VerboseError
+			if err == doltdb.ErrBranchNotFound {
+				verr = errhand.BuildDError("fatal: branch '%s' not found", brName).Build()
+			} else if err == actions.ErrCOBranchDelete {
+				verr = errhand.BuildDError("error: Cannot delete checked out branch '%s'", brName).Build()
+			} else {
+				bdr := errhand.BuildDError("fatal: Unexpected error deleting '%s'", brName)
+				verr = bdr.AddCause(err).Build()
+			}
+			return HandleVErrAndExitCode(verr, usage)
 		}
 	}
 
-	return HandleVErrAndExitCode(verr, usage)
+	return HandleVErrAndExitCode(nil, usage)
 }
 
 func createBranch(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgParseResults, usage cli.UsagePrinter) int {
@@ -336,4 +360,9 @@ func HandleVErrAndExitCode(verr errhand.VerboseError, usage cli.UsagePrinter) in
 	}
 
 	return 0
+}
+
+// BuildVerrAndExit is a shortcut for building a verbose error and calling HandleVerrAndExitCode with it
+func BuildVerrAndExit(errMsg string, cause error) int {
+	return HandleVErrAndExitCode(errhand.BuildDError(errMsg).AddCause(cause).Build(), nil)
 }

@@ -277,7 +277,7 @@ type TableFile interface {
 	NumChunks() int
 
 	// Open returns an io.ReadCloser which can be used to read the bytes of a table file.
-	Open() (io.ReadCloser, error)
+	Open(ctx context.Context) (io.ReadCloser, error)
 }
 
 // Describes what is possible to do with TableFiles in a TableFileStore.
@@ -292,6 +292,9 @@ type TableFileStoreOps struct {
 type TableFileStore interface {
 	// Sources retrieves the current root hash, and a list of all the table files
 	Sources(ctx context.Context) (hash.Hash, []TableFile, error)
+
+	// Returns the total size, in bytes, of the table files in this Store.
+	Size(ctx context.Context) (uint64, error)
 
 	// WriteTableFile will read a table file from the provided reader and write it to the TableFileStore
 	WriteTableFile(ctx context.Context, fileId string, numChunks int, rd io.Reader, contentLength uint64, contentHash []byte) error

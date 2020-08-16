@@ -223,10 +223,8 @@ SQL
     dolt reset --hard
     run dolt status
     [ "$status" -eq 0 ]
-    [[ "$output" =~ "On branch master" ]] || false
-    [[ "$output" =~ "Untracked files" ]] || false
-    [[ "$output" =~ ([[:space:]]*new table:[[:space:]]*test) ]] || false
-    [[ ! "$output" =~ "LICENSE.md" ]] || false
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "nothing to commit, working tree clean" ]] || false
     run cat LICENSE.md
     [ "$output" = "license-text" ]
  }
@@ -688,7 +686,7 @@ SQL
     run dolt schema show
     [ "$status" -eq 0 ]
     [[ "$output" =~ "No tables in working set" ]] || false
-    dolt table import -c -s `batshelper employees-sch.json` employees `batshelper employees-tbl.json`
+    dolt table import -c -s `batshelper employees-sch.sql` employees `batshelper employees-tbl.json`
     run dolt schema show
     [ "$status" -eq 0 ]
     [[ "$output" =~ "employees @ working" ]] || false

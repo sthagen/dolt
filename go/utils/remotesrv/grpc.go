@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 
 	"google.golang.org/grpc/codes"
@@ -34,13 +36,14 @@ type RemoteChunkStore struct {
 	HttpHost string
 	csCache  *DBCache
 	bucket   string
+	remotesapi.UnimplementedChunkStoreServiceServer
 }
 
 func NewHttpFSBackedChunkStore(httpHost string, csCache *DBCache) *RemoteChunkStore {
 	return &RemoteChunkStore{
-		httpHost,
-		csCache,
-		"",
+		HttpHost: httpHost,
+		csCache:  csCache,
+		bucket:   "",
 	}
 }
 
@@ -183,7 +186,7 @@ func (rs *RemoteChunkStore) GetUploadLocations(ctx context.Context, req *remotes
 
 func (rs *RemoteChunkStore) getUploadUrl(logger func(string), org, repoName string, tfd *remotesapi.TableFileDetails) (string, error) {
 	fileID := hash.New(tfd.Id).String()
-	expectedFiles[fileID] = *tfd
+	expectedFiles[fileID] = tfd
 	return fmt.Sprintf("http://%s/%s/%s/%s", rs.HttpHost, org, repoName, fileID), nil
 }
 
@@ -278,9 +281,28 @@ func (rs *RemoteChunkStore) GetRepoMetadata(ctx context.Context, req *remotesapi
 		return nil, status.Error(codes.Internal, "Could not get chunkstore")
 	}
 
+	_, tfs, err := cs.Sources(ctx)
+
+	if err != nil {
+		return nil, err
+	}
+
+	var size uint64
+	for _, tf := range tfs {
+		path := filepath.Join(req.RepoId.Org, req.RepoId.RepoName, tf.FileID())
+		info, err := os.Stat(path)
+
+		if err != nil {
+			return nil, err
+		}
+
+		size += uint64(info.Size())
+	}
+
 	return &remotesapi.GetRepoMetadataResponse{
-		NbfVersion: cs.Version(),
-		NbsVersion: nbs.StorageVersion,
+		NbfVersion:  cs.Version(),
+		NbsVersion:  nbs.StorageVersion,
+		StorageSize: size,
 	}, nil
 }
 

@@ -30,18 +30,25 @@ teardown() {
 }
 
 @test "table export sql datetime" {
-    skip "dates should be quoted"
     dolt sql <<SQL
 CREATE TABLE test (
   pk BIGINT PRIMARY KEY,
-  v DATETIME
+  v1 DATE,
+  v2 TIME,
+  v3 YEAR,
+  v4 DATETIME
 );
+INSERT INTO test VALUES
+    (1,'2020-04-08','11:11:11','2020','2020-04-08 11:11:11'),
+    (2,'2020-04-08','12:12:12','2020','2020-04-08 12:12:12');
 SQL
-    dolt sql -q "INSERT INTO test VALUES (1, '2020-04-08 11:11:11'), (2, '2020-04-08 12:12:12')"
     dolt table export test test.sql
     run cat test.sql
-    [[ "$output" =~ 'INSERT INTO `test` (`pk`,`v`) VALUES (1,"2020-04-08 11:11:11");' ]] || false
-    [[ "$output" =~ 'INSERT INTO `test` (`pk`,`v`) VALUES (2,"2020-04-08 12:12:12");' ]] || false
+    [[ "$output" =~ "INSERT INTO \`test\` (\`pk\`,\`v1\`,\`v2\`,\`v3\`,\`v4\`) VALUES (1,'2020-04-08','11:11:11','2020','2020-04-08 11:11:11');" ]] || false
+    [[ "$output" =~ "INSERT INTO \`test\` (\`pk\`,\`v1\`,\`v2\`,\`v3\`,\`v4\`) VALUES (2,'2020-04-08','12:12:12','2020','2020-04-08 12:12:12');" ]] || false
+    dolt table export test test.json
+    run cat test.json
+    [ "$output" = '{"rows": [{"pk":1,"v1":"2020-04-08","v2":"11:11:11","v3":"2020","v4":"2020-04-08 11:11:11"},{"pk":2,"v1":"2020-04-08","v2":"12:12:12","v3":"2020","v4":"2020-04-08 12:12:12"}]}' ]
 }
 
 @test "dolt table import from stdin export to stdout" {
@@ -147,9 +154,8 @@ if rows[2] != "9,8,7,6,5,4".split(","):
     dolt table export person_info export-csv.csv
     dolt checkout person_info
 
-    skip "Exported csv should handle not null contrained empty values so csv can be reimported" run dolt table import -u person_info sql-csv.csv
+    run dolt table import -u person_info sql-csv.csv
     [ "$status" -eq 0 ]
-
     run dolt table import -u person_info export-csv.csv
     [ "$status" -eq 0 ]
 }

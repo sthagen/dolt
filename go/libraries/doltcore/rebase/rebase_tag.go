@@ -26,7 +26,6 @@ import (
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema/encoding"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/table/typed"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/table/typed/noms"
 	"github.com/liquidata-inc/dolt/go/libraries/utils/set"
 	ndiff "github.com/liquidata-inc/dolt/go/store/diff"
@@ -48,13 +47,13 @@ func NeedsUniqueTagMigration(ctx context.Context, ddb *doltdb.DoltDB) (bool, err
 	}
 
 	for _, b := range bb {
-		cs, err := doltdb.NewCommitSpec("head", b.String())
+		cs, err := doltdb.NewCommitSpec(b.String())
 
 		if err != nil {
 			return false, err
 		}
 
-		c, err := ddb.Resolve(ctx, cs)
+		c, err := ddb.Resolve(ctx, cs, nil)
 
 		if err != nil {
 			return false, err
@@ -92,6 +91,7 @@ func NeedsUniqueTagMigration(ctx context.Context, ddb *doltdb.DoltDB) (bool, err
 func MigrateUniqueTags(ctx context.Context, dEnv *env.DoltEnv) error {
 	ddb := dEnv.DoltDB
 	cwbSpec := dEnv.RepoState.CWBHeadSpec()
+	cwbRef := dEnv.RepoState.CWBHeadRef()
 	dd, err := dEnv.GetAllValidDocDetails()
 
 	if err != nil {
@@ -107,13 +107,13 @@ func MigrateUniqueTags(ctx context.Context, dEnv *env.DoltEnv) error {
 	var headCommits []*doltdb.Commit
 	for _, dRef := range branches {
 
-		cs, err := doltdb.NewCommitSpec("head", dRef.String())
+		cs, err := doltdb.NewCommitSpec(dRef.String())
 
 		if err != nil {
 			return err
 		}
 
-		cm, err := ddb.Resolve(ctx, cs)
+		cm, err := ddb.Resolve(ctx, cs, nil)
 
 		if err != nil {
 			return err
@@ -183,7 +183,7 @@ func MigrateUniqueTags(ctx context.Context, dEnv *env.DoltEnv) error {
 		}
 	}
 
-	cm, err := dEnv.DoltDB.Resolve(ctx, cwbSpec)
+	cm, err := dEnv.DoltDB.Resolve(ctx, cwbSpec, cwbRef)
 
 	if err != nil {
 		return err
@@ -219,13 +219,13 @@ func MigrateUniqueTags(ctx context.Context, dEnv *env.DoltEnv) error {
 
 // TagRebaseForRef rebases the provided DoltRef, swapping all tags in the TagMapping.
 func TagRebaseForRef(ctx context.Context, dRef ref.DoltRef, ddb *doltdb.DoltDB, tagMapping TagMapping) (*doltdb.Commit, error) {
-	cs, err := doltdb.NewCommitSpec("head", dRef.String())
+	cs, err := doltdb.NewCommitSpec(dRef.String())
 
 	if err != nil {
 		return nil, err
 	}
 
-	cm, err := ddb.Resolve(ctx, cs)
+	cm, err := ddb.Resolve(ctx, cs, nil)
 
 	if err != nil {
 		return nil, err
@@ -362,6 +362,13 @@ func replayCommitWithNewTag(ctx context.Context, root, parentRoot, rebasedParent
 
 		rebasedSch := schema.SchemaFromCols(schCC)
 
+		for _, index := range sch.Indexes().AllIndexes() {
+			_, err = rebasedSch.Indexes().AddIndexByColNames(index.Name(), index.ColumnNames(), schema.IndexProperties{IsUnique: index.IsUnique(), Comment: index.Comment()})
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		// super schema rebase
 		ss, _, err := root.GetSuperSchema(ctx, tblName)
 
@@ -431,7 +438,7 @@ func replayCommitWithNewTag(ctx context.Context, root, parentRoot, rebasedParent
 		rshs := rsh.String()
 		fmt.Println(rshs)
 
-		rebasedTable, err := doltdb.NewTable(ctx, rebasedParentRoot.VRW(), rebasedSchVal, rebasedRows)
+		rebasedTable, err := doltdb.NewTable(ctx, rebasedParentRoot.VRW(), rebasedSchVal, rebasedRows, nil)
 
 		if err != nil {
 			return nil, err
@@ -469,7 +476,7 @@ func replayRowDiffs(ctx context.Context, vrw types.ValueReadWriter, rSch schema.
 
 	ad := diff.NewAsyncDiffer(diffBufSize)
 	// get all differences (including merges) between original commit and its parent
-	ad.Start(ctx, rows, parentRows)
+	ad.Start(ctx, parentRows, rows)
 	defer ad.Close()
 
 	for {
@@ -522,10 +529,8 @@ func dropValsForDeletedColumns(ctx context.Context, nbf *types.NomsBinFormat, ro
 		return rows, nil
 	}
 
-	deletedCols, err := typed.TypedColCollectionSubtraction(parentSch, sch)
-	if err != nil {
-		return types.EmptyMap, err
-	}
+	deletedCols := schema.ColCollectionSetDifference(parentSch.GetAllCols(), sch.GetAllCols())
+
 	if deletedCols.Size() == 0 {
 		return rows, nil
 	}
@@ -593,94 +598,43 @@ func dropValsForDeletedColumns(ctx context.Context, nbf *types.NomsBinFormat, ro
 
 func modifyDifferenceTag(d *ndiff.Difference, nbf *types.NomsBinFormat, rSch schema.Schema, tagMapping map[uint64]uint64) (keyTup types.LesserValuable, valTup types.Valuable, err error) {
 
-	k := d.KeyValue.(types.Tuple)
-	if k.Len()%2 != 0 {
-		panic("A tagged tuple must have an even column count.")
-	}
-
-	kItr, err := k.Iterator()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	idx := 0
-	kk := make([]types.Value, k.Len())
-	for kItr.HasMore() {
-		_, tag, err := kItr.Next()
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// i.HasMore() is true here because of assertion above.
-		_, val, err := kItr.Next()
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if tag.Kind() != types.UintKind {
-			panic("Invalid tagged tuple must have uint tags.")
-		}
-
-		if val != types.NullValue {
-			newTag := tagMapping[uint64(tag.(types.Uint))]
-			kk[idx] = types.Uint(newTag)
-			kk[idx+1] = val
-		}
-		idx += 2
-	}
-
-	keyTup, err = types.NewTuple(nbf, kk...)
+	ktv, err := row.ParseTaggedValues(d.KeyValue.(types.Tuple))
 
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if d.NewValue == nil {
-		return keyTup, nil, nil
+	newKtv := make(row.TaggedValues)
+	for tag, val := range ktv {
+		newTag, found := tagMapping[tag]
+		if !found {
+			newTag = tag
+
+		}
+		newKtv[newTag] = val
+
 	}
 
-	v := d.NewValue.(types.Tuple)
-	if v.Len()%2 != 0 {
-		panic("A tagged tuple must have an even column count.")
-	}
+	keyTup = newKtv.NomsTupleForPKCols(nbf, rSch.GetPKCols())
 
-	vItr, err := v.Iterator()
-	if err != nil {
-		return nil, nil, err
-	}
+	valTup = d.NewValue
+	if d.NewValue != nil {
+		tv, err := row.ParseTaggedValues(d.NewValue.(types.Tuple))
 
-	idx = 0
-	vv := make([]types.Value, v.Len())
-	for vItr.HasMore() {
-		_, tag, err := vItr.Next()
 		if err != nil {
 			return nil, nil, err
 		}
 
-		// i.HasMore() is true here because of assertion above.
-		_, val, err := vItr.Next()
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if tag.Kind() != types.UintKind {
-			panic("Invalid tagged tuple must have uint tags.")
-		}
-
-		if val != types.NullValue {
-			newTag, ok := tagMapping[uint64(tag.(types.Uint))]
-			if ok {
-				vv[idx] = types.Uint(newTag)
-				vv[idx+1] = val
-				idx += 2
+		newTv := make(row.TaggedValues)
+		for tag, val := range tv {
+			newTag, found := tagMapping[tag]
+			if !found {
+				newTag = tag
 			}
+
+			newTv[newTag] = val
 		}
-	}
-
-	valTup, err = types.NewTuple(nbf, vv[:idx]...)
-
-	if err != nil {
-		return nil, nil, err
+		valTup = newTv.NomsTupleForNonPKCols(nbf, rSch.GetNonPKCols())
 	}
 
 	return keyTup, valTup, nil

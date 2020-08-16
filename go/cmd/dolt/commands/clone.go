@@ -16,6 +16,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -207,10 +208,12 @@ func envForClone(ctx context.Context, nbf *types.NomsBinFormat, r env.Remote, di
 	}
 
 	dEnv.RSLoadErr = nil
-	dEnv.RepoState, err = env.CloneRepoState(dEnv.FS, r)
+	if !env.IsEmptyRemote(r) {
+		dEnv.RepoState, err = env.CloneRepoState(dEnv.FS, r)
 
-	if err != nil {
-		return nil, errhand.BuildDError("error: unable to create repo state with remote " + r.Name).AddCause(err).Build()
+		if err != nil {
+			return nil, errhand.BuildDError("error: unable to create repo state with remote " + r.Name).AddCause(err).Build()
+		}
 	}
 
 	return dEnv, nil
@@ -288,19 +291,21 @@ func cloneRemote(ctx context.Context, srcDB *doltdb.DoltDB, remoteName, branch s
 	wg.Wait()
 
 	if err != nil {
+		if err == datas.ErrNoData {
+			err = errors.New("remote at that url contains no Dolt data")
+		}
+
 		return errhand.BuildDError("error: clone failed").AddCause(err).Build()
 	}
 
+	branches, err := dEnv.DoltDB.GetBranches(ctx)
+	if err != nil {
+		return errhand.BuildDError("error: failed to list branches").AddCause(err).Build()
+	}
+
 	if branch == "" {
-		branches, err := dEnv.DoltDB.GetBranches(ctx)
-
-		if err != nil {
-			return errhand.BuildDError("error: failed to list branches").AddCause(err).Build()
-		}
-
 		for _, brnch := range branches {
 			branch = brnch.GetPath()
-
 			if branch == doltdb.MasterBranch {
 				break
 			}
@@ -311,7 +316,7 @@ func cloneRemote(ctx context.Context, srcDB *doltdb.DoltDB, remoteName, branch s
 	// the remote.
 	performPull := true
 	if branch == "" {
-		err = initEmptyClonedRepo(dEnv, err, ctx)
+		err = initEmptyClonedRepo(ctx, dEnv)
 		if err != nil {
 			return nil
 		}
@@ -320,8 +325,8 @@ func cloneRemote(ctx context.Context, srcDB *doltdb.DoltDB, remoteName, branch s
 		performPull = false
 	}
 
-	cs, _ := doltdb.NewCommitSpec("HEAD", branch)
-	cm, err := dEnv.DoltDB.Resolve(ctx, cs)
+	cs, _ := doltdb.NewCommitSpec(branch)
+	cm, err := dEnv.DoltDB.Resolve(ctx, cs, nil)
 
 	if err != nil {
 		return errhand.BuildDError("error: could not get " + branch).AddCause(err).Build()
@@ -332,14 +337,33 @@ func cloneRemote(ctx context.Context, srcDB *doltdb.DoltDB, remoteName, branch s
 		return errhand.BuildDError("error: could not get the root value of " + branch).AddCause(err).Build()
 	}
 
-	if performPull {
-		remoteRef := ref.NewRemoteRef(remoteName, branch)
+	// After actions.Clone, we have repository with a local branch for
+	// every branch in the remote. What we want is a remote branch ref for
+	// every branch in the remote. We iterate through local branches and
+	// create remote refs corresponding to each of them. We delete all of
+	// the local branches except for the one corresponding to |branch|.
+	for _, brnch := range branches {
+		cs, _ := doltdb.NewCommitSpec(brnch.GetPath())
+		cm, err := dEnv.DoltDB.Resolve(ctx, cs, nil)
+		if err != nil {
+			return errhand.BuildDError("error: could not resolve branch ref at " + brnch.String()).AddCause(err).Build()
+		}
 
-		err = dEnv.DoltDB.FastForward(ctx, remoteRef, cm)
+		remoteRef := ref.NewRemoteRef(remoteName, brnch.GetPath())
+		err = dEnv.DoltDB.SetHead(ctx, remoteRef, cm)
 		if err != nil {
 			return errhand.BuildDError("error: could not create remote ref at " + remoteRef.String()).AddCause(err).Build()
 		}
 
+		if brnch.GetPath() != branch {
+			err := dEnv.DoltDB.DeleteBranch(ctx, brnch)
+			if err != nil {
+				return errhand.BuildDError("error: could not delete local branch " + brnch.String() + " after clone.").AddCause(err).Build()
+			}
+		}
+	}
+
+	if performPull {
 		err = actions.SaveDocsFromRoot(ctx, rootVal, dEnv)
 		if err != nil {
 			return errhand.BuildDError("error: failed to update docs on the filesystem").AddCause(err).Build()
@@ -370,7 +394,7 @@ func cloneRemote(ctx context.Context, srcDB *doltdb.DoltDB, remoteName, branch s
 
 // Inits an empty, newly cloned repo. This would be unnecessary if we properly initialized the storage for a repository
 // when we created it on dolthub. If we do that, this code can be removed.
-func initEmptyClonedRepo(dEnv *env.DoltEnv, err error, ctx context.Context) error {
+func initEmptyClonedRepo(ctx context.Context, dEnv *env.DoltEnv) error {
 	name := dEnv.Config.GetStringOrDefault(env.UserNameKey, "")
 	email := dEnv.Config.GetStringOrDefault(env.UserEmailKey, "")
 
@@ -380,7 +404,7 @@ func initEmptyClonedRepo(dEnv *env.DoltEnv, err error, ctx context.Context) erro
 		return errhand.BuildDError("error: could not determine email. run dolt config --global --add %[1]s", env.UserEmailKey).Build()
 	}
 
-	err = dEnv.InitDBWithTime(ctx, types.Format_Default, *name, *email, doltdb.CommitNowFunc())
+	err := dEnv.InitDBWithTime(ctx, types.Format_Default, *name, *email, doltdb.CommitNowFunc())
 	if err != nil {
 		return errhand.BuildDError("error: could not initialize repository").AddCause(err).Build()
 	}

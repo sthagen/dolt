@@ -27,6 +27,7 @@ import (
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/cli"
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/errhand"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/diff"
+	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env/actions"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/merge"
@@ -80,6 +81,7 @@ func (cmd CommitCmd) createArgParser() *argparser.ArgParser {
 	ap.SupportsString(commitMessageArg, "m", "msg", "Use the given {{.LessThan}}msg{{.GreaterThan}} as the commit message.")
 	ap.SupportsFlag(allowEmptyFlag, "", "Allow recording a commit that has the exact same data as its sole parent. This is usually a mistake, so it is disabled by default. This option bypasses that safety.")
 	ap.SupportsString(dateParam, "", "date", "Specify the date used in the commit. If not specified the current system time is used.")
+	ap.SupportsFlag(forceFlag, "f", "Ignores any foreign key warnings and proceeds with the commit.")
 	return ap
 }
 
@@ -94,7 +96,7 @@ func (cmd CommitCmd) Exec(ctx context.Context, commandStr string, args []string,
 		msg = getCommitMessageFromEditor(ctx, dEnv)
 	}
 
-	t := time.Now()
+	t := doltdb.CommitNowFunc()
 	if commitTimeStr, ok := apr.GetValue(dateParam); ok {
 		var err error
 		t, err = parseDate(commitTimeStr)
@@ -104,7 +106,12 @@ func (cmd CommitCmd) Exec(ctx context.Context, commandStr string, args []string,
 		}
 	}
 
-	err := actions.CommitStaged(ctx, dEnv, msg, t, apr.Contains(allowEmptyFlag))
+	err := actions.CommitStaged(ctx, dEnv, actions.CommitStagedProps{
+		Message:          msg,
+		Date:             t,
+		AllowEmpty:       apr.Contains(allowEmptyFlag),
+		CheckForeignKeys: !apr.Contains(forceFlag),
+	})
 	if err == nil {
 		// if the commit was successful, print it out using the log command
 		return LogCmd{}.Exec(ctx, "log", []string{"-n=1"}, dEnv)
@@ -175,6 +182,12 @@ func handleCommitErr(ctx context.Context, dEnv *env.DoltEnv, err error, usage cl
 		}
 	}
 
+	if actions.IsTblInConflict(err) {
+		inConflict := actions.GetTablesForError(err)
+		bdr := errhand.BuildDError(`tables %v have unresolved conflicts from the merge. resolve the conflicts before commiting`, inConflict)
+		return HandleVErrAndExitCode(bdr.Build(), usage)
+	}
+
 	verr := errhand.BuildDError("error: Failed to commit changes.").AddCause(err).Build()
 	return HandleVErrAndExitCode(verr, usage)
 }
@@ -200,7 +213,7 @@ func buildInitalCommitMsg(ctx context.Context, dEnv *env.DoltEnv) string {
 	color.NoColor = true
 
 	currBranch := dEnv.RepoState.CWBHeadRef()
-	stagedTblDiffs, notStagedTblDiffs, _ := diff.GetTableDiffs(ctx, dEnv)
+	stagedTblDiffs, notStagedTblDiffs, _ := diff.GetStagedUnstagedTableDeltas(ctx, dEnv)
 
 	workingTblsInConflict, _, _, err := merge.GetTablesInConflict(ctx, dEnv)
 	if err != nil {

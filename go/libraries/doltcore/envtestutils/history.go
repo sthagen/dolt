@@ -60,10 +60,10 @@ type HistoryNode struct {
 // InitializeWithHistory will go through the provided historyNodes and create the intended commit graph
 func InitializeWithHistory(t *testing.T, ctx context.Context, dEnv *env.DoltEnv, historyNodes ...HistoryNode) {
 	for _, node := range historyNodes {
-		cs, err := doltdb.NewCommitSpec("HEAD", "master")
+		cs, err := doltdb.NewCommitSpec("master")
 		require.NoError(t, err)
 
-		cm, err := dEnv.DoltDB.Resolve(ctx, cs)
+		cm, err := dEnv.DoltDB.Resolve(ctx, cs, nil)
 		require.NoError(t, err)
 
 		processNode(t, ctx, dEnv, node, cm)
@@ -80,10 +80,10 @@ func processNode(t *testing.T, ctx context.Context, dEnv *env.DoltEnv, node Hist
 		require.NoError(t, err)
 	}
 
-	cs, err := doltdb.NewCommitSpec("HEAD", branchRef.String())
+	cs, err := doltdb.NewCommitSpec(branchRef.String())
 	require.NoError(t, err)
 
-	cm, err := dEnv.DoltDB.Resolve(ctx, cs)
+	cm, err := dEnv.DoltDB.Resolve(ctx, cs, nil)
 	require.NoError(t, err)
 
 	root, err := cm.GetRootValue()
@@ -142,7 +142,14 @@ func UpdateTables(t *testing.T, ctx context.Context, root *doltdb.RootValue, tbl
 		}
 
 		schVal, err := encoding.MarshalSchemaAsNomsValue(ctx, root.VRW(), sch)
-		tbl, err = doltdb.NewTable(ctx, root.VRW(), schVal, rowData)
+
+		var indexData *types.Map
+		if tbl != nil {
+			existingIndexData, err := tbl.GetIndexData(ctx)
+			require.NoError(t, err)
+			indexData = &existingIndexData
+		}
+		tbl, err = doltdb.NewTable(ctx, root.VRW(), schVal, rowData, indexData)
 		require.NoError(t, err)
 
 		root, err = root.PutTable(ctx, tblName, tbl)

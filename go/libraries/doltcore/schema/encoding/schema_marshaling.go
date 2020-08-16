@@ -16,7 +16,6 @@ package encoding
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
@@ -130,8 +129,17 @@ func (enc encodedTypeInfo) decodeTypeInfo() (typeinfo.TypeInfo, error) {
 	return typeinfo.FromTypeParams(id, enc.Params)
 }
 
+type encodedIndex struct {
+	Name    string   `noms:"name" json:"name"`
+	Tags    []uint64 `noms:"tags" json:"tags"`
+	Comment string   `noms:"comment" json:"comment"`
+	Unique  bool     `noms:"unique" json:"unique"`
+	Hidden  bool     `noms:"hidden,omitempty" json:"hidden,omitempty"`
+}
+
 type schemaData struct {
-	Columns []encodedColumn `noms:"columns" json:"columns"`
+	Columns         []encodedColumn `noms:"columns" json:"columns"`
+	IndexCollection []encodedIndex  `noms:"idxColl,omitempty" json:"idxColl,omitempty"`
 }
 
 func toSchemaData(sch schema.Schema) (schemaData, error) {
@@ -150,7 +158,17 @@ func toSchemaData(sch schema.Schema) (schemaData, error) {
 		return schemaData{}, err
 	}
 
-	return schemaData{encCols}, nil
+	encodedIndexes := make([]encodedIndex, sch.Indexes().Count())
+	for i, index := range sch.Indexes().AllIndexes() {
+		encodedIndexes[i] = encodedIndex{
+			Name:    index.Name(),
+			Tags:    index.IndexedColumnTags(),
+			Comment: index.Comment(),
+			Unique:  index.IsUnique(),
+		}
+	}
+
+	return schemaData{encCols, encodedIndexes}, nil
 }
 
 func (sd schemaData) decodeSchema() (schema.Schema, error) {
@@ -171,7 +189,16 @@ func (sd schemaData) decodeSchema() (schema.Schema, error) {
 		return nil, err
 	}
 
-	return schema.SchemaFromCols(colColl), nil
+	sch := schema.SchemaFromCols(colColl)
+
+	for _, encodedIndex := range sd.IndexCollection {
+		_, err = sch.Indexes().UnsafeAddIndexByColTags(encodedIndex.Name, encodedIndex.Tags, schema.IndexProperties{IsUnique: encodedIndex.Unique, Comment: encodedIndex.Comment})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return sch, nil
 }
 
 // MarshalSchemaAsNomsValue takes a Schema and converts it to a types.Value
@@ -288,33 +315,4 @@ func UnmarshalSuperSchemaNomsValue(ctx context.Context, nbf *types.NomsBinFormat
 	}
 
 	return ssd.decodeSuperSchema()
-}
-
-// MarshalAsJson takes a Schema and returns a string containing it's json encoding
-func MarshalAsJson(sch schema.Schema) (string, error) {
-	sd, err := toSchemaData(sch)
-
-	if err != nil {
-		return "", err
-	}
-
-	jsonStr, err := json.MarshalIndent(sd, "", "  ")
-
-	if err != nil {
-		return "", err
-	}
-
-	return string(jsonStr), nil
-}
-
-// UnmarshalJson takes a json string and Unmarshalls it into a Schema.
-func UnmarshalJson(jsonStr string) (schema.Schema, error) {
-	var sd schemaData
-	err := json.Unmarshal([]byte(jsonStr), &sd)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return sd.decodeSchema()
 }

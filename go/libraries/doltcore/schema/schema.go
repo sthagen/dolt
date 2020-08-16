@@ -24,6 +24,9 @@ type Schema interface {
 
 	// GetAllCols gets the collection of all columns (pk and non-pk)
 	GetAllCols() *ColCollection
+
+	// Indexes returns a collection of all indexes on the table that this schema belongs to.
+	Indexes() IndexCollection
 }
 
 // ColFromTag returns a schema.Column from a schema and a tag
@@ -54,30 +57,16 @@ func ExtractAllColNames(sch Schema) (map[uint64]string, error) {
 // TODO: this function never returns an error
 // SchemasAreEqual tests equality of two schemas.
 func SchemasAreEqual(sch1, sch2 Schema) (bool, error) {
-	all1 := sch1.GetAllCols()
-	all2 := sch2.GetAllCols()
-
-	if all1.Size() != all2.Size() {
+	if sch1 == nil && sch2 == nil {
+		return true, nil
+	} else if sch1 == nil || sch2 == nil {
 		return false, nil
 	}
-
-	areEqual := true
-	err := all1.Iter(func(tag uint64, col1 Column) (stop bool, err error) {
-		col2, ok := all2.GetByTag(tag)
-
-		if !ok || !col1.Equals(col2) {
-			areEqual = false
-			return true, nil
-		}
-
+	colCollIsEqual := ColCollsAreEqual(sch1.GetAllCols(), sch2.GetAllCols())
+	if !colCollIsEqual {
 		return false, nil
-	})
-
-	if err != nil {
-		return false, err
 	}
-
-	return areEqual, nil
+	return sch1.Indexes().Equals(sch2.Indexes()), nil
 }
 
 // TODO: this function never returns an error

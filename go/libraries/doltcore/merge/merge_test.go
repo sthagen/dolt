@@ -249,12 +249,16 @@ var uuids = []types.UUID{
 
 var keyTuples = make([]types.Tuple, len(uuids))
 
+var index schema.Index
+
 func init() {
 	keyTag := types.Uint(idTag)
 
 	for i, id := range uuids {
 		keyTuples[i] = mustTuple(types.NewTuple(types.Format_7_18, keyTag, id))
 	}
+
+	index, _ = sch.Indexes().AddIndexByColTags("idx_name", []uint64{nameTag}, schema.IndexProperties{IsUnique: false, Comment: ""})
 }
 
 func setupMergeTest() (types.ValueReadWriter, *doltdb.Commit, *doltdb.Commit, types.Map, types.Map) {
@@ -267,8 +271,8 @@ func setupMergeTest() (types.ValueReadWriter, *doltdb.Commit, *doltdb.Commit, ty
 		panic(err)
 	}
 
-	masterHeadSpec, _ := doltdb.NewCommitSpec("head", "master")
-	masterHead, err := ddb.Resolve(context.Background(), masterHeadSpec)
+	masterHeadSpec, _ := doltdb.NewCommitSpec("master")
+	masterHead, err := ddb.Resolve(context.Background(), masterHeadSpec, nil)
 
 	if err != nil {
 		panic(err)
@@ -358,19 +362,20 @@ func setupMergeTest() (types.ValueReadWriter, *doltdb.Commit, *doltdb.Commit, ty
 	}
 
 	schVal, _ := encoding.MarshalSchemaAsNomsValue(context.Background(), vrw, sch)
-	tbl, err := doltdb.NewTable(context.Background(), vrw, schVal, initialRows)
+
+	tbl, err := doltdb.NewTable(context.Background(), vrw, schVal, initialRows, nil)
 
 	if err != nil {
 		panic(err)
 	}
 
-	updatedTbl, err := doltdb.NewTable(context.Background(), vrw, schVal, updatedRows)
+	updatedTbl, err := doltdb.NewTable(context.Background(), vrw, schVal, updatedRows, nil)
 
 	if err != nil {
 		panic(err)
 	}
 
-	mergeTbl, err := doltdb.NewTable(context.Background(), vrw, schVal, mergeRows)
+	mergeTbl, err := doltdb.NewTable(context.Background(), vrw, schVal, mergeRows, nil)
 
 	if err != nil {
 		panic(err)
@@ -434,8 +439,8 @@ func TestMergeCommits(t *testing.T) {
 	require.False(t, ff)
 
 	merger := NewMerger(context.Background(), root, mergeRoot, ancRoot, vrw)
-
-	merged, stats, err := merger.MergeTable(context.Background(), tableName)
+	tableEditSession := doltdb.CreateTableEditSession(root, doltdb.TableEditSessionProps{})
+	merged, stats, err := merger.MergeTable(context.Background(), tableName, tableEditSession)
 
 	if err != nil {
 		t.Fatal(err)
@@ -451,7 +456,9 @@ func TestMergeCommits(t *testing.T) {
 	assert.NoError(t, err)
 	targVal, err := schRef.TargetValue(context.Background(), vrw)
 	assert.NoError(t, err)
-	expected, err := doltdb.NewTable(context.Background(), vrw, targVal, expectedRows)
+	expected, err := doltdb.NewTable(context.Background(), vrw, targVal, expectedRows, nil)
+	assert.NoError(t, err)
+	expected, err = expected.RebuildIndexData(context.Background())
 	assert.NoError(t, err)
 	expected, err = expected.SetConflicts(context.Background(), doltdb.NewConflict(schRef, schRef, schRef), expectedConflicts)
 	assert.NoError(t, err)
@@ -466,5 +473,14 @@ func TestMergeCommits(t *testing.T) {
 		if !mergedRows.Equals(expectedRows) {
 			t.Error(mustString(types.EncodedValue(context.Background(), mergedRows)), "\n!=\n", mustString(types.EncodedValue(context.Background(), expectedRows)))
 		}
+		mergedIndexRows, err := merged.GetIndexRowData(context.Background(), index.Name())
+		assert.NoError(t, err)
+		expectedIndexRows, err := expected.GetIndexRowData(context.Background(), index.Name())
+		assert.NoError(t, err)
+		if expectedRows.Len() != mergedIndexRows.Len() || !mergedIndexRows.Equals(expectedIndexRows) {
+			t.Error("index contents are incorrect")
+		}
+	} else {
+		assert.Fail(t, "%v and %v do not equal", h, eh)
 	}
 }

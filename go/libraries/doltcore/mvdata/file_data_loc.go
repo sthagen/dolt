@@ -32,7 +32,7 @@ import (
 	"github.com/liquidata-inc/dolt/go/libraries/utils/filesys"
 )
 
-// DFFFromString returns a data object from a string.
+// DFFromString returns a data object from a string.
 func DFFromString(dfStr string) DataFormat {
 	switch strings.ToLower(dfStr) {
 	case "csv", ".csv":
@@ -71,7 +71,7 @@ func (dl FileDataLocation) Exists(ctx context.Context, root *doltdb.RootValue, f
 }
 
 // NewReader creates a TableReadCloser for the DataLocation
-func (dl FileDataLocation) NewReader(ctx context.Context, root *doltdb.RootValue, fs filesys.ReadableFS, schPath string, opts interface{}) (rdCl table.TableReadCloser, sorted bool, err error) {
+func (dl FileDataLocation) NewReader(ctx context.Context, root *doltdb.RootValue, fs filesys.ReadableFS, opts interface{}) (rdCl table.TableReadCloser, sorted bool, err error) {
 	exists, isDir := fs.Exists(dl.Path)
 
 	if !exists {
@@ -106,25 +106,35 @@ func (dl FileDataLocation) NewReader(ctx context.Context, root *doltdb.RootValue
 		return rd, false, err
 
 	case JsonFile:
-		var sch schema.Schema = nil
-		if schPath == "" {
+		var sch schema.Schema
+		jsonOpts, _ := opts.(JSONOptions)
+		if jsonOpts.SchFile != "" {
+			tn, s, err := SchAndTableNameFromFile(ctx, jsonOpts.SchFile, fs, root)
+			if err != nil {
+				return nil, false, err
+			}
+			if tn != jsonOpts.TableName {
+				return nil, false, fmt.Errorf("table name '%s' from schema file %s does not match table arg '%s'", tn, jsonOpts.SchFile, jsonOpts.TableName)
+			}
+			sch = s
+		} else {
 			if opts == nil {
 				return nil, false, errors.New("Unable to determine table name on JSON import")
 			}
-			jsonOpts, _ := opts.(JSONOptions)
-			table, exists, err := root.GetTable(context.TODO(), jsonOpts.TableName)
+			tbl, exists, err := root.GetTable(context.TODO(), jsonOpts.TableName)
 			if !exists {
 				return nil, false, errors.New(fmt.Sprintf("The following table could not be found:\n%v", jsonOpts.TableName))
 			}
 			if err != nil {
 				return nil, false, errors.New(fmt.Sprintf("An error occurred attempting to read the table:\n%v", err.Error()))
 			}
-			sch, err = table.GetSchema(context.TODO())
+			sch, err = tbl.GetSchema(context.TODO())
 			if err != nil {
 				return nil, false, errors.New(fmt.Sprintf("An error occurred attempting to read the table schema:\n%v", err.Error()))
 			}
 		}
-		rd, err := json.OpenJSONReader(root.VRW().Format(), dl.Path, fs, sch, schPath)
+
+		rd, err := json.OpenJSONReader(root.VRW().Format(), dl.Path, fs, sch)
 		return rd, false, err
 	}
 
@@ -133,7 +143,7 @@ func (dl FileDataLocation) NewReader(ctx context.Context, root *doltdb.RootValue
 
 // NewCreatingWriter will create a TableWriteCloser for a DataLocation that will create a new table, or overwrite
 // an existing table.
-func (dl FileDataLocation) NewCreatingWriter(ctx context.Context, mvOpts *MoveOptions, root *doltdb.RootValue, fs filesys.WritableFS, sortedInput bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error) {
+func (dl FileDataLocation) NewCreatingWriter(ctx context.Context, mvOpts DataMoverOptions, root *doltdb.RootValue, fs filesys.WritableFS, sortedInput bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error) {
 	switch dl.Format {
 	case CsvFile:
 		return csv.OpenCSVWriter(dl.Path, fs, outSch, csv.NewCSVInfo())
@@ -144,7 +154,7 @@ func (dl FileDataLocation) NewCreatingWriter(ctx context.Context, mvOpts *MoveOp
 	case JsonFile:
 		return json.OpenJSONWriter(dl.Path, fs, outSch)
 	case SqlFile:
-		return sqlexport.OpenSQLExportWriter(dl.Path, mvOpts.TableName, fs, outSch)
+		return sqlexport.OpenSQLExportWriter(ctx, dl.Path, fs, root, mvOpts.SrcName(), outSch)
 	}
 
 	panic("Invalid Data Format." + string(dl.Format))
@@ -152,12 +162,12 @@ func (dl FileDataLocation) NewCreatingWriter(ctx context.Context, mvOpts *MoveOp
 
 // NewUpdatingWriter will create a TableWriteCloser for a DataLocation that will update and append rows based on
 // their primary key.
-func (dl FileDataLocation) NewUpdatingWriter(ctx context.Context, mvOpts *MoveOptions, root *doltdb.RootValue, fs filesys.WritableFS, srcIsSorted bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error) {
+func (dl FileDataLocation) NewUpdatingWriter(ctx context.Context, mvOpts DataMoverOptions, root *doltdb.RootValue, fs filesys.WritableFS, srcIsSorted bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error) {
 	panic("Updating of files is not supported")
 }
 
 // NewReplacingWriter will create a TableWriteCloser for a DataLocation that will overwrite an existing table while
 // preserving schema
-func (dl FileDataLocation) NewReplacingWriter(ctx context.Context, mvOpts *MoveOptions, root *doltdb.RootValue, fs filesys.WritableFS, srcIsSorted bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error) {
+func (dl FileDataLocation) NewReplacingWriter(ctx context.Context, mvOpts DataMoverOptions, root *doltdb.RootValue, fs filesys.WritableFS, srcIsSorted bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error) {
 	panic("Replacing files is not supported")
 }

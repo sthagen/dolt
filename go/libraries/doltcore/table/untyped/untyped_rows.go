@@ -25,6 +25,7 @@ import (
 // NewUntypedSchema takes an array of field names and returns a schema where the fields use the provided names, are of
 // kind types.StringKind, and are not required.
 func NewUntypedSchema(colNames ...string) (map[string]uint64, schema.Schema) {
+	// TODO: pass PK arg here
 	return NewUntypedSchemaWithFirstTag(0, colNames...)
 }
 
@@ -154,6 +155,7 @@ func UntypeUnkeySchema(sch schema.Schema) (schema.Schema, error) {
 // The columns will all be of type types.StringKind and and IsPartOfPK will be false for every column, and all of the
 // columns will be in the schemas non-key ColumnCollection.
 func UntypedSchemaUnion(schemas ...schema.Schema) (schema.Schema, error) {
+	// todo: use colcoll union
 	unionSch, err := typed.TypedSchemaUnion(schemas...)
 
 	if err != nil {

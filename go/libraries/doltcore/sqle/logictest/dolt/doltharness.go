@@ -25,9 +25,9 @@ import (
 	sqle "github.com/liquidata-inc/go-mysql-server"
 	"github.com/liquidata-inc/go-mysql-server/sql"
 	"github.com/liquidata-inc/sqllogictest/go/logictest"
+	"github.com/liquidata-inc/vitess/go/vt/proto/query"
+	"github.com/liquidata-inc/vitess/go/vt/sqlparser"
 	"github.com/shopspring/decimal"
-	"vitess.io/vitess/go/vt/proto/query"
-	"vitess.io/vitess/go/vt/sqlparser"
 
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
@@ -164,15 +164,8 @@ func innerInit(h *DoltHarness, dEnv *env.DoltEnv) error {
 		}
 	}
 
-	ctx.RegisterIndexDriver(dsql.NewDoltIndexDriver(dsqlDBs...))
-	err = ctx.LoadIndexes(ctx, h.engine.Catalog.AllDatabases())
-
 	if len(dbs) == 1 {
 		h.sess.SetCurrentDatabase(dbs[0].Name())
-	}
-
-	if err != nil {
-		return err
 	}
 
 	return nil

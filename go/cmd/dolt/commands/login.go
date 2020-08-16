@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/skratchdot/open-golang/open"
+	"google.golang.org/grpc"
 
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/cli"
 	"github.com/liquidata-inc/dolt/go/cmd/dolt/errhand"
@@ -28,6 +29,7 @@ import (
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/creds"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env/actions"
+	"github.com/liquidata-inc/dolt/go/libraries/doltcore/grpcendpoint"
 	"github.com/liquidata-inc/dolt/go/libraries/utils/argparser"
 	"github.com/liquidata-inc/dolt/go/libraries/utils/filesys"
 )
@@ -114,6 +116,9 @@ func loginWithNewCreds(ctx context.Context, dEnv *env.DoltEnv) errhand.VerboseEr
 		return errhand.BuildDError("error: Unable to create credentials.").AddCause(err).Build()
 	}
 
+	cli.Println("Credentials created successfully.")
+	cli.Println("pub key:", dc.PubKeyBase32Str())
+
 	cli.Println(path)
 
 	return loginWithCreds(ctx, dEnv, dc, openBrowserFirst)
@@ -195,7 +200,14 @@ func openBrowserForCredsAdd(dEnv *env.DoltEnv, dc creds.DoltCreds) {
 func getCredentialsClient(dEnv *env.DoltEnv, dc creds.DoltCreds) (remotesapi.CredentialsServiceClient, errhand.VerboseError) {
 	host := dEnv.Config.GetStringOrDefault(env.RemotesApiHostKey, env.DefaultRemotesApiHost)
 	port := dEnv.Config.GetStringOrDefault(env.RemotesApiHostPortKey, env.DefaultRemotesApiPort)
-	conn, err := dEnv.GrpcConnWithCreds(fmt.Sprintf("%s:%s", *host, *port), false, dc)
+	endpoint, opts, err := dEnv.GetGRPCDialParams(grpcendpoint.Config{
+		Endpoint: fmt.Sprintf("%s:%s", *host, *port),
+		Creds:    dc,
+	})
+	if err != nil {
+		return nil, errhand.BuildDError("error: unable to build dial options for connecting to server with credentials.").AddCause(err).Build()
+	}
+	conn, err := grpc.Dial(endpoint, opts...)
 	if err != nil {
 		return nil, errhand.BuildDError("error: unable to connect to server with credentials.").AddCause(err).Build()
 	}
