@@ -25,6 +25,7 @@ import (
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/rowconv"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
+	sqleSchema "github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle/schema"
 	"github.com/liquidata-inc/dolt/go/libraries/doltcore/table"
 	"github.com/liquidata-inc/dolt/go/libraries/utils/set"
 	"github.com/liquidata-inc/dolt/go/store/hash"
@@ -55,7 +56,7 @@ type HistoryTable struct {
 	commitFilters         []sql.Expression
 	rowFilters            []sql.Expression
 	cmItr                 doltdb.CommitItr
-	readerCreateFuncCache map[hash.Hash]CreateReaderFunc
+	readerCreateFuncCache *ThreadSafeCRFuncCache
 }
 
 // NewHistoryTable creates a history table
@@ -102,7 +103,7 @@ func NewHistoryTable(ctx *sql.Context, db Database, tblName string) (sql.Table, 
 	}
 
 	tableName := doltdb.DoltHistoryTablePrefix + tblName
-	sqlSch, err := doltSchemaToSqlSchema(tableName, sch)
+	sqlSch, err := sqleSchema.FromDoltSchema(tableName, sch)
 
 	if err != nil {
 		return nil, err
@@ -115,7 +116,7 @@ func NewHistoryTable(ctx *sql.Context, db Database, tblName string) (sql.Table, 
 		ss:                    ss,
 		sqlSch:                sqlSch,
 		cmItr:                 cmItr,
-		readerCreateFuncCache: make(map[hash.Hash]CreateReaderFunc),
+		readerCreateFuncCache: NewThreadSafeCRFuncCache(),
 	}, nil
 }
 
@@ -325,7 +326,7 @@ func newRowItrForTableAtCommit(
 	tblName string,
 	ss *schema.SuperSchema,
 	filters []sql.Expression,
-	readerCreateFuncCache map[hash.Hash]CreateReaderFunc) (*rowItrForTableAtCommit, error) {
+	readerCreateFuncCache *ThreadSafeCRFuncCache) (*rowItrForTableAtCommit, error) {
 	root, err := cm.GetRootValue()
 
 	if err != nil {
@@ -367,15 +368,10 @@ func newRowItrForTableAtCommit(
 		return nil, err
 	}
 
-	var createReaderFunc CreateReaderFunc
-	if createReaderFunc, ok = readerCreateFuncCache[schHash]; !ok {
-		createReaderFunc, err = CreateReaderFuncLimitedByExpressions(tbl.Format(), tblSch, filters)
+	createReaderFunc, err := readerCreateFuncCache.GetOrCreate(schHash, tbl.Format(), tblSch, filters)
 
-		if err != nil {
-			return nil, err
-		}
-
-		readerCreateFuncCache[schHash] = createReaderFunc
+	if err != nil {
+		return nil, err
 	}
 
 	rd, err := createReaderFunc(ctx, m)

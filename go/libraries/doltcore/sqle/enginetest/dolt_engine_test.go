@@ -17,8 +17,14 @@ package enginetest
 import (
 	"testing"
 
+	"github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle"
+
 	"github.com/liquidata-inc/go-mysql-server/enginetest"
 )
+
+func init() {
+	sqle.MinRowsPerPartition = 2
+}
 
 func TestQueries(t *testing.T) {
 	enginetest.TestQueries(t, newDoltHarness(t))
@@ -161,4 +167,8 @@ func TestNaturalJoinDisjoint(t *testing.T) {
 func TestInnerNestedInNaturalJoins(t *testing.T) {
 	t.Skip("No primary key in test tables")
 	enginetest.TestInnerNestedInNaturalJoins(t, newDoltHarness(t))
+}
+
+func TestColumnDefaults(t *testing.T) {
+	enginetest.TestColumnDefaults(t, newDoltHarness(t))
 }

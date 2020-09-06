@@ -1,0 +1,64 @@
+FROM golang:1.15.0-buster as builder
+WORKDIR /root/building/go
+COPY ./go/ .
+
+# install dolt from source
+ENV GOFLAGS="-mod=readonly"
+RUN go build -o dolt ./cmd/dolt
+
+FROM ubuntu:18.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt update -y
+RUN apt install -y software-properties-common
+
+# install python, libmysqlclient-dev, java, bats
+RUN add-apt-repository ppa:deadsnakes/ppa -y
+RUN apt install -y \
+	python3.8 \
+	python3-pip \
+	curl \
+	wget \
+	pkg-config \
+	mysql-client \
+	libmysqlclient-dev \
+	openjdk-8-jdk \
+	ant \
+	ca-certificates-java \
+	bats
+
+# install dotnet
+RUN wget https://packages.microsoft.com/config/ubuntu/18.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
+RUN dpkg -i packages-microsoft-prod.deb
+RUN apt-get update; \
+      apt-get install -y apt-transport-https && \
+      apt-get update && \
+      apt-get install -y dotnet-sdk-3.1
+
+# install node
+RUN curl -sL https://deb.nodesource.com/setup_14.x | bash -
+RUN apt install -y nodejs
+
+# install mysql connector and pymsql
+RUN pip3 install mysql-connector-python PyMySQL
+
+# Fix certificate issues
+RUN update-ca-certificates -f
+
+# Setup JAVA_HOME -- useful for docker commandline
+ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64/
+
+COPY --from=builder /root/building/go/dolt /usr/local/bin/dolt
+COPY ./mysql-client-tests /mysql-client-tests
+COPY ./mysql-client-tests-entrypoint.sh /mysql-client-tests/entrypoint.sh
+
+# install mysql connector java
+RUN curl -L -o /mysql-client-tests/java/mysql-connector-java-8.0.21.jar \
+  https://repo1.maven.org/maven2/mysql/mysql-connector-java/8.0.21/mysql-connector-java-8.0.21.jar
+
+# install node deps
+WORKDIR /mysql-client-tests/node
+RUN npm install
+
+WORKDIR /mysql-client-tests
+ENTRYPOINT ["/mysql-client-tests/entrypoint.sh"]
