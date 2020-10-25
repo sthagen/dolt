@@ -18,10 +18,10 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/liquidata-inc/go-mysql-server/sql"
-	"github.com/liquidata-inc/vitess/go/sqltypes"
+	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/vitess/go/sqltypes"
 
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 type inlineBlobType struct {
@@ -99,8 +99,13 @@ func (ti *inlineBlobType) GetTypeParams() map[string]string {
 
 // IsValid implements TypeInfo interface.
 func (ti *inlineBlobType) IsValid(v types.Value) bool {
-	_, err := ti.ConvertNomsValueToValue(v)
-	return err == nil
+	if _, ok := v.(types.InlineBlob); ok {
+		return true
+	}
+	if _, ok := v.(types.Null); ok || v == nil {
+		return true
+	}
+	return false
 }
 
 // NomsKind implements TypeInfo interface.

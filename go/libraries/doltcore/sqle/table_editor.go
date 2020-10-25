@@ -15,10 +15,10 @@
 package sqle
 
 import (
-	"github.com/liquidata-inc/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql"
 
-	"github.com/liquidata-inc/dolt/go/cmd/dolt/errhand"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 )
 
 // sqlTableEditor is a wrapper for *doltdb.SessionedTableEditor that complies with the SQL interface.
@@ -95,8 +95,9 @@ func (te *sqlTableEditor) Close(ctx *sql.Context) error {
 func (te *sqlTableEditor) flush(ctx *sql.Context) error {
 	newRoot, err := te.tableEditor.Flush(ctx)
 	if err != nil {
-		return errhand.BuildDError("failed to write table back to database").AddCause(err).Build()
+		return err
 	}
+
 	newTable, ok, err := newRoot.GetTable(ctx, te.t.name)
 	if err != nil {
 		return errhand.BuildDError("failed to load updated table").AddCause(err).Build()

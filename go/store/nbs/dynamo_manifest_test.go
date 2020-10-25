@@ -27,8 +27,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/liquidata-inc/dolt/go/store/constants"
-	"github.com/liquidata-inc/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/constants"
+	"github.com/dolthub/dolt/go/store/hash"
 )
 
 const (
@@ -71,7 +71,12 @@ func TestDynamoManifestParseIfExists(t *testing.T) {
 }
 
 func makeContents(lock, root string, specs []tableSpec) manifestContents {
-	return manifestContents{constants.NomsVersion, computeAddr([]byte(lock)), hash.Of([]byte(root)), specs}
+	return manifestContents{
+		vers:  constants.NomsVersion,
+		lock:  computeAddr([]byte(lock)),
+		root:  hash.Of([]byte(root)),
+		specs: specs,
+	}
 }
 
 func TestDynamoManifestUpdateWontClobberOldVersion(t *testing.T) {

@@ -26,10 +26,10 @@ import (
 	"context"
 	"io"
 
-	"github.com/liquidata-inc/dolt/go/store/nbs"
+	"github.com/dolthub/dolt/go/store/nbs"
 
-	"github.com/liquidata-inc/dolt/go/store/chunks"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 // Database provides versioned storage for noms values. While Values can be
@@ -156,6 +156,16 @@ type Database interface {
 
 func NewDatabase(cs chunks.ChunkStore) Database {
 	return newDatabase(cs)
+}
+
+// GarbageCollector provides a method to
+// remove unreferenced data from a store.
+type GarbageCollector interface {
+	types.ValueReadWriter
+
+	// GC traverses the database starting at the Root and removes
+	// all unreferenced data from persistent storage.
+	GC(ctx context.Context) error
 }
 
 // CanUsePuller returns true if a datas.Puller can be used to pull data from one Database into another.  Not all

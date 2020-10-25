@@ -19,8 +19,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/liquidata-inc/dolt/go/store/diff"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/row"
+
+	"github.com/dolthub/dolt/go/store/diff"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 type DiffSummaryProgress struct {
@@ -64,7 +66,7 @@ func reportChanges(change *diff.Difference, ch chan<- DiffSummaryProgress) error
 	case types.DiffChangeModified:
 		oldTuple := change.OldValue.(types.Tuple)
 		newTuple := change.NewValue.(types.Tuple)
-		cellChanges, err := oldTuple.CountDifferencesBetweenTupleFields(newTuple)
+		cellChanges, err := row.CountCellDiffs(oldTuple, newTuple)
 		if err != nil {
 			return err
 		}

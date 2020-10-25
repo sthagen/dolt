@@ -29,11 +29,11 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"io"
-	"sync"
 
-	"github.com/liquidata-inc/dolt/go/store/atomicerr"
-	"github.com/liquidata-inc/dolt/go/store/chunks"
-	"github.com/liquidata-inc/dolt/go/store/hash"
+	"golang.org/x/sync/errgroup"
+
+	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/dolthub/dolt/go/store/hash"
 )
 
 /*
@@ -169,9 +169,9 @@ func (a addr) Checksum() uint32 {
 	return binary.BigEndian.Uint32(a[addrSize-checksumSize:])
 }
 
-func parseAddr(b []byte) (addr, error) {
+func parseAddr(str string) (addr, error) {
 	var h addr
-	_, err := encoding.Decode(h[:], b)
+	_, err := encoding.Decode(h[:], []byte(str))
 	return h, err
 }
 
@@ -227,8 +227,8 @@ type chunkReader interface {
 	has(h addr) (bool, error)
 	hasMany(addrs []hasRecord) (bool, error)
 	get(ctx context.Context, h addr, stats *Stats) ([]byte, error)
-	getMany(ctx context.Context, reqs []getRecord, foundChunks chan<- *chunks.Chunk, wg *sync.WaitGroup, ae *atomicerr.AtomicError, stats *Stats) bool
-	getManyCompressed(ctx context.Context, reqs []getRecord, foundCmpChunks chan<- CompressedChunk, wg *sync.WaitGroup, ae *atomicerr.AtomicError, stats *Stats) bool
+	getMany(ctx context.Context, eg *errgroup.Group, reqs []getRecord, found func(*chunks.Chunk), stats *Stats) (bool, error)
+	getManyCompressed(ctx context.Context, eg *errgroup.Group, reqs []getRecord, found func(CompressedChunk), stats *Stats) (bool, error)
 	extract(ctx context.Context, chunks chan<- extractRecord) error
 	count() (uint32, error)
 	uncompressedLen() (uint64, error)
@@ -241,22 +241,18 @@ type chunkReadPlanner interface {
 	findOffsets(reqs []getRecord) (ors offsetRecSlice, remaining bool)
 	getManyAtOffsets(
 		ctx context.Context,
-		reqs []getRecord,
+		eg *errgroup.Group,
 		offsetRecords offsetRecSlice,
-		foundChunks chan<- *chunks.Chunk,
-		wg *sync.WaitGroup,
-		ae *atomicerr.AtomicError,
+		found func(*chunks.Chunk),
 		stats *Stats,
-	)
+	) error
 	getManyCompressedAtOffsets(
 		ctx context.Context,
-		reqs []getRecord,
+		eg *errgroup.Group,
 		offsetRecords offsetRecSlice,
-		foundCmpChunks chan<- CompressedChunk,
-		wg *sync.WaitGroup,
-		ae *atomicerr.AtomicError,
+		found func(CompressedChunk),
 		stats *Stats,
-	)
+	) error
 }
 
 type chunkSource interface {
@@ -296,22 +292,29 @@ type TableFileStoreOps struct {
 	CanRead bool
 	// True is the TableFileStore supports writing table files.
 	CanWrite bool
+	// True is the TableFileStore supports pruning unused table files.
+	CanPrune bool
+	// True is the TableFileStore supports garbage collecting chunks.
+	CanGC bool
 }
 
 // TableFileStore is an interface for interacting with table files directly
 type TableFileStore interface {
-	// Sources retrieves the current root hash, and a list of all the table files
+	// Sources retrieves the current root hash, and a list of all the table files.
 	Sources(ctx context.Context) (hash.Hash, []TableFile, error)
 
-	// Returns the total size, in bytes, of the table files in this Store.
+	// Size  returns the total size, in bytes, of the table files in this Store.
 	Size(ctx context.Context) (uint64, error)
 
-	// WriteTableFile will read a table file from the provided reader and write it to the TableFileStore
+	// WriteTableFile will read a table file from the provided reader and write it to the TableFileStore.
 	WriteTableFile(ctx context.Context, fileId string, numChunks int, rd io.Reader, contentLength uint64, contentHash []byte) error
+
+	// PruneTableFiles deletes old table files that are no longer referenced in the manifest.
+	PruneTableFiles(ctx context.Context) error
 
 	// SetRootChunk changes the root chunk hash from the previous value to the new root.
 	SetRootChunk(ctx context.Context, root, previous hash.Hash) error
 
-	// Returns a description of the support TableFile operations. Some stores only support reading table files, not writing.
+	// SupportedOperations returns a description of the support TableFile operations. Some stores only support reading table files, not writing.
 	SupportedOperations() TableFileStoreOps
 }

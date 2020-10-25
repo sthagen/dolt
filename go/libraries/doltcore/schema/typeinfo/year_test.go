@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 func TestYearConvertNomsValueToValue(t *testing.T) {
@@ -50,11 +50,6 @@ func TestYearConvertNomsValueToValue(t *testing.T) {
 			2155,
 			2155,
 			false,
-		},
-		{
-			3000,
-			0,
-			true,
 		},
 	}
 
@@ -124,7 +119,7 @@ func TestYearFormatValue(t *testing.T) {
 		expectedErr bool
 	}{
 		{
-			1,
+			2001,
 			"2001",
 			false,
 		},
@@ -139,14 +134,9 @@ func TestYearFormatValue(t *testing.T) {
 			false,
 		},
 		{
-			89,
+			1989,
 			"1989",
 			false,
-		},
-		{
-			3000,
-			"",
-			true,
 		},
 	}
 

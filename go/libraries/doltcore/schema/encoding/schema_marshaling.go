@@ -18,10 +18,10 @@ import (
 	"context"
 	"errors"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema/typeinfo"
-	"github.com/liquidata-inc/dolt/go/store/marshal"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema/typeinfo"
+	"github.com/dolthub/dolt/go/store/marshal"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 // Correct Marshalling & Unmarshalling is essential to compatibility across Dolt versions
@@ -45,6 +45,8 @@ type encodedColumn struct {
 	TypeInfo encodedTypeInfo `noms:"typeinfo,omitempty" json:"typeinfo,omitempty"`
 
 	Default string `noms:"default,omitempty" json:"default,omitempty"`
+
+	Comment string `noms:"comment,omitempty" json:"comment,omitempty"`
 
 	Constraints []encodedConstraint `noms:"col_constraints" json:"col_constraints"`
 
@@ -84,6 +86,7 @@ func encodeColumn(col schema.Column) encodedColumn {
 		col.IsPartOfPK,
 		encodeTypeInfo(col.TypeInfo),
 		col.Default,
+		col.Comment,
 		encodeAllColConstraints(col.Constraints),
 	}
 }
@@ -102,7 +105,7 @@ func (nfd encodedColumn) decodeColumn() (schema.Column, error) {
 		return schema.Column{}, errors.New("cannot decode column due to unknown schema format")
 	}
 	colConstraints := decodeAllColConstraint(nfd.Constraints)
-	return schema.NewColumnWithTypeInfo(nfd.Name, nfd.Tag, typeInfo, nfd.IsPartOfPK, nfd.Default, colConstraints...)
+	return schema.NewColumnWithTypeInfo(nfd.Name, nfd.Tag, typeInfo, nfd.IsPartOfPK, nfd.Default, nfd.Comment, colConstraints...)
 }
 
 type encodedConstraint struct {
@@ -133,11 +136,11 @@ func (enc encodedTypeInfo) decodeTypeInfo() (typeinfo.TypeInfo, error) {
 }
 
 type encodedIndex struct {
-	Name    string   `noms:"name" json:"name"`
-	Tags    []uint64 `noms:"tags" json:"tags"`
-	Comment string   `noms:"comment" json:"comment"`
-	Unique  bool     `noms:"unique" json:"unique"`
-	Hidden  bool     `noms:"hidden,omitempty" json:"hidden,omitempty"`
+	Name            string   `noms:"name" json:"name"`
+	Tags            []uint64 `noms:"tags" json:"tags"`
+	Comment         string   `noms:"comment" json:"comment"`
+	Unique          bool     `noms:"unique" json:"unique"`
+	IsSystemDefined bool     `noms:"hidden,omitempty" json:"hidden,omitempty"` // Was previously named Hidden, do not change noms name
 }
 
 type schemaData struct {
@@ -164,10 +167,11 @@ func toSchemaData(sch schema.Schema) (schemaData, error) {
 	encodedIndexes := make([]encodedIndex, sch.Indexes().Count())
 	for i, index := range sch.Indexes().AllIndexes() {
 		encodedIndexes[i] = encodedIndex{
-			Name:    index.Name(),
-			Tags:    index.IndexedColumnTags(),
-			Comment: index.Comment(),
-			Unique:  index.IsUnique(),
+			Name:            index.Name(),
+			Tags:            index.IndexedColumnTags(),
+			Comment:         index.Comment(),
+			Unique:          index.IsUnique(),
+			IsSystemDefined: !index.IsUserDefined(),
 		}
 	}
 
@@ -195,7 +199,15 @@ func (sd schemaData) decodeSchema() (schema.Schema, error) {
 	sch := schema.SchemaFromCols(colColl)
 
 	for _, encodedIndex := range sd.IndexCollection {
-		_, err = sch.Indexes().UnsafeAddIndexByColTags(encodedIndex.Name, encodedIndex.Tags, schema.IndexProperties{IsUnique: encodedIndex.Unique, Comment: encodedIndex.Comment})
+		_, err = sch.Indexes().UnsafeAddIndexByColTags(
+			encodedIndex.Name,
+			encodedIndex.Tags,
+			schema.IndexProperties{
+				IsUnique:      encodedIndex.Unique,
+				IsUserDefined: !encodedIndex.IsSystemDefined,
+				Comment:       encodedIndex.Comment,
+			},
+		)
 		if err != nil {
 			return nil, err
 		}

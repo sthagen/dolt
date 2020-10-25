@@ -21,28 +21,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/dtestutils"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema/typeinfo"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/sql/sqltestutil"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dtestutils"
+	"github.com/dolthub/dolt/go/libraries/doltcore/row"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema/typeinfo"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
-const expectedCreateSQL = "CREATE TABLE `table_name` (\n" +
-	"  `id` BIGINT NOT NULL COMMENT 'tag:200',\n" +
-	"  `first_name` LONGTEXT NOT NULL COMMENT 'tag:201',\n" +
-	"  `last_name` LONGTEXT NOT NULL COMMENT 'tag:202',\n" +
-	"  `is_married` BIT(1) COMMENT 'tag:203',\n" +
-	"  `age` BIGINT COMMENT 'tag:204',\n" +
-	"  `rating` DOUBLE COMMENT 'tag:206',\n" +
-	"  `uuid` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin COMMENT 'tag:207',\n" +
-	"  `num_episodes` BIGINT UNSIGNED COMMENT 'tag:208',\n" +
-	"  PRIMARY KEY (`id`)\n" +
-	");"
 const expectedDropSql = "DROP TABLE `table_name`;"
 const expectedDropIfExistsSql = "DROP TABLE IF EXISTS `table_name`;"
-const expectedAddColSql = "ALTER TABLE `table_name` ADD `c0` BIGINT NOT NULL COMMENT 'tag:9';"
+const expectedAddColSql = "ALTER TABLE `table_name` ADD `c0` BIGINT NOT NULL;"
 const expectedDropColSql = "ALTER TABLE `table_name` DROP `first_name`;"
 const expectedRenameColSql = "ALTER TABLE `table_name` RENAME COLUMN `id` TO `pk`;"
 const expectedRenameTableSql = "RENAME TABLE `table_name` TO `new_table_name`;"
@@ -52,13 +40,6 @@ type test struct {
 	row            row.Row
 	sch            schema.Schema
 	expectedOutput string
-}
-
-func TestSchemaAsCreateStmt(t *testing.T) {
-	tSchema := sqltestutil.PeopleTestSchema
-	stmt := CreateTableStmtWithTags("table_name", tSchema, nil, nil)
-
-	assert.Equal(t, expectedCreateSQL, stmt)
 }
 
 func TestTableDropStmt(t *testing.T) {
@@ -74,7 +55,7 @@ func TestTableDropIfExistsStmt(t *testing.T) {
 }
 
 func TestAlterTableAddColStmt(t *testing.T) {
-	newColDef := "`c0` BIGINT NOT NULL COMMENT 'tag:9'"
+	newColDef := "`c0` BIGINT NOT NULL"
 	stmt := AlterTableAddColStmt("table_name", newColDef)
 
 	assert.Equal(t, expectedAddColSql, stmt)

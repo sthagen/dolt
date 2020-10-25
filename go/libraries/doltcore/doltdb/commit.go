@@ -18,9 +18,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/liquidata-inc/dolt/go/store/datas"
-	"github.com/liquidata-inc/dolt/go/store/hash"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/datas"
+	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 const (
@@ -199,7 +199,7 @@ func GetCommitAncestor(ctx context.Context, cm1, cm2 *Commit) (*Commit, error) {
 		return nil, err
 	}
 
-	ref, err := getCommitAncestorRef(ctx, ref1, ref2, cm1.vrw)
+	ref, err := getCommitAncestorRef(ctx, ref1, ref2, cm1.vrw, cm2.vrw)
 
 	if err != nil {
 		return nil, err
@@ -220,8 +220,8 @@ func GetCommitAncestor(ctx context.Context, cm1, cm2 *Commit) (*Commit, error) {
 	return NewCommit(cm1.vrw, ancestorSt), nil
 }
 
-func getCommitAncestorRef(ctx context.Context, ref1, ref2 types.Ref, vrw types.ValueReadWriter) (types.Ref, error) {
-	ancestorRef, ok, err := datas.FindCommonAncestor(ctx, ref1, ref2, vrw)
+func getCommitAncestorRef(ctx context.Context, ref1, ref2 types.Ref, vrw1, vrw2 types.ValueReadWriter) (types.Ref, error) {
+	ancestorRef, ok, err := datas.FindCommonAncestor(ctx, ref1, ref2, vrw1, vrw2)
 
 	if err != nil {
 		return types.Ref{}, err

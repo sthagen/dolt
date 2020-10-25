@@ -19,11 +19,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liquidata-inc/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 func TestVarStringConvertNomsValueToValue(t *testing.T) {
@@ -56,18 +56,6 @@ func TestVarStringConvertNomsValueToValue(t *testing.T) {
 			"  This is a sentence.  ",
 			"  This is a sentence.  ",
 			false,
-		},
-		{
-			generateVarStringType(t, 2, false),
-			"yay",
-			"",
-			true,
-		},
-		{
-			generateVarStringType(t, 2, true),
-			"yey",
-			"",
-			true,
 		},
 	}
 
@@ -178,18 +166,6 @@ func TestVarStringFormatValue(t *testing.T) {
 			"  This is a sentence.  ",
 			"  This is a sentence.  ",
 			false,
-		},
-		{
-			generateVarStringType(t, 2, false),
-			"yay",
-			"",
-			true,
-		},
-		{
-			generateVarStringType(t, 2, true),
-			"yey",
-			"",
-			true,
 		},
 	}
 

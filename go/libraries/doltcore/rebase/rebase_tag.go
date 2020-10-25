@@ -19,18 +19,18 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/diff"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/ref"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema/encoding"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/table/typed/noms"
-	"github.com/liquidata-inc/dolt/go/libraries/utils/set"
-	ndiff "github.com/liquidata-inc/dolt/go/store/diff"
-	"github.com/liquidata-inc/dolt/go/store/hash"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/diff"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/env"
+	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
+	"github.com/dolthub/dolt/go/libraries/doltcore/row"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema/encoding"
+	"github.com/dolthub/dolt/go/libraries/doltcore/table/typed/noms"
+	"github.com/dolthub/dolt/go/libraries/utils/set"
+	ndiff "github.com/dolthub/dolt/go/store/diff"
+	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 const diffBufSize = 4096
@@ -363,7 +363,15 @@ func replayCommitWithNewTag(ctx context.Context, root, parentRoot, rebasedParent
 		rebasedSch := schema.SchemaFromCols(schCC)
 
 		for _, index := range sch.Indexes().AllIndexes() {
-			_, err = rebasedSch.Indexes().AddIndexByColNames(index.Name(), index.ColumnNames(), schema.IndexProperties{IsUnique: index.IsUnique(), Comment: index.Comment()})
+			_, err = rebasedSch.Indexes().AddIndexByColNames(
+				index.Name(),
+				index.ColumnNames(),
+				schema.IndexProperties{
+					IsUnique:      index.IsUnique(),
+					IsUserDefined: index.IsUserDefined(),
+					Comment:       index.Comment(),
+				},
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -800,6 +808,7 @@ func handleSystemTableMappings(ctx context.Context, tblName string, root *doltdb
 		}
 	case doltdb.SchemasTableName:
 		newTagsByColName = map[string]uint64{
+			doltdb.SchemasTablesIdCol:       doltdb.DoltSchemasIdTag,
 			doltdb.SchemasTablesTypeCol:     doltdb.DoltSchemasTypeTag,
 			doltdb.SchemasTablesNameCol:     doltdb.DoltSchemasNameTag,
 			doltdb.SchemasTablesFragmentCol: doltdb.DoltSchemasFragmentTag,

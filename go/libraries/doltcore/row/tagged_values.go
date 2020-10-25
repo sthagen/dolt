@@ -18,8 +18,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 type TaggedValues map[uint64]types.Value
@@ -152,26 +152,25 @@ func (tt TaggedValues) copy() TaggedValues {
 }
 
 func ParseTaggedValues(tpl types.Tuple) (TaggedValues, error) {
-	if tpl.Len()%2 != 0 {
-		panic("A tagged tuple must have an even column count.")
-	}
+	vals, err := tpl.AsSlice()
 
-	taggedTuple := make(TaggedValues, tpl.Len()/2)
-	i, err := tpl.Iterator()
 	if err != nil {
 		return nil, err
 	}
-	for i.HasMore() {
-		_, tag, err := i.Next()
-		if err != nil {
-			return nil, err
-		}
 
-		// i.HasMore() is true here because of assertion above.
-		_, val, err := i.Next()
-		if err != nil {
-			return nil, err
-		}
+	return TaggedValuesFromTupleValueSlice(vals)
+}
+
+func TaggedValuesFromTupleValueSlice(vals types.TupleValueSlice) (TaggedValues, error) {
+	valCount := len(vals)
+	if valCount%2 != 0 {
+		panic("A tagged tuple must have an even column count.")
+	}
+
+	taggedTuple := make(TaggedValues, valCount/2)
+	for i, j := 0, 0; j < valCount; i, j = i+1, j+2 {
+		tag := vals[j]
+		val := vals[j+1]
 
 		if tag.Kind() != types.UintKind {
 			panic("Invalid tagged tuple must have uint tags.")
@@ -199,4 +198,31 @@ func (tt TaggedValues) String() string {
 
 	str += "\n}"
 	return str
+}
+
+// CountCellDiffs returns the number of fields that are different between two
+// tuples and does not panic if tuples are different lengths.
+func CountCellDiffs(from, to types.Tuple) (uint64, error) {
+	changed := 0
+	f, err := ParseTaggedValues(from)
+	t, err := ParseTaggedValues(to)
+
+	if err != nil {
+		return 0, err
+	}
+
+	for i, v := range f {
+		ov, ok := t[i]
+		if !ok || !v.Equals(ov) {
+			changed++
+		}
+	}
+
+	for i := range t {
+		if f[i] == nil {
+			changed++
+		}
+	}
+
+	return uint64(changed), nil
 }

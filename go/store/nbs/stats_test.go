@@ -29,9 +29,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/liquidata-inc/dolt/go/store/chunks"
-	"github.com/liquidata-inc/dolt/go/store/constants"
-	"github.com/liquidata-inc/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/dolthub/dolt/go/store/constants"
+	"github.com/dolthub/dolt/go/store/hash"
 )
 
 func TestStats(t *testing.T) {
@@ -118,7 +118,7 @@ func TestStats(t *testing.T) {
 		hashes[i] = c.Hash()
 	}
 	chunkChan := make(chan *chunks.Chunk, 3)
-	err = store.GetMany(context.Background(), hashes.HashSet(), chunkChan)
+	err = store.GetMany(context.Background(), hashes.HashSet(), func(c *chunks.Chunk) { chunkChan <- c })
 	assert.NoError(err)
 	assert.Equal(uint64(4), stats(store).FileReadLatency.Samples())
 	assert.Equal(uint64(54), stats(store).FileBytesPerRead.Sum())

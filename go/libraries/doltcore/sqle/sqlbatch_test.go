@@ -25,10 +25,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/dtestutils"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
-	. "github.com/liquidata-inc/dolt/go/libraries/doltcore/sql/sqltestutil"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dtestutils"
+	"github.com/dolthub/dolt/go/libraries/doltcore/row"
+	. "github.com/dolthub/dolt/go/libraries/doltcore/sql/sqltestutil"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 func TestSqlBatchInserts(t *testing.T) {
@@ -200,9 +200,10 @@ func TestSqlBatchInsertErrors(t *testing.T) {
 	assert.NoError(t, drainIter(rowIter))
 
 	// This generates an error at insert time because of the bad type for the uuid column
-	_, _, err = engine.Query(sqlCtx, `insert into people values
+	_, rowIter, err = engine.Query(sqlCtx, `insert into people values
 					(2, "Milhouse", "VanHouten", false, 1, 5.1, true, 677)`)
-	assert.Error(t, err)
+	assert.NoError(t, err)
+	assert.Error(t, drainIter(rowIter))
 
 	// Error from the first statement appears here
 	assert.Error(t, db.Flush(sqlCtx))

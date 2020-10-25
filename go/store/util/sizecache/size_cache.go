@@ -29,7 +29,7 @@ import (
 	"container/list"
 	"sync"
 
-	"github.com/liquidata-inc/dolt/go/store/d"
+	"github.com/dolthub/dolt/go/store/d"
 )
 
 type sizeCacheEntry struct {
@@ -138,4 +138,8 @@ func (c *SizeCache) Drop(key interface{}) {
 		c.lru.Remove(entry.lruEntry)
 		delete(c.cache, key)
 	}
+}
+
+func (c *SizeCache) Size() uint64 {
+	return c.maxSize
 }

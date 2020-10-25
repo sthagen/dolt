@@ -25,12 +25,11 @@ import (
 	"context"
 	"errors"
 	"sort"
-	"sync"
 
-	"github.com/liquidata-inc/dolt/go/store/atomicerr"
+	"golang.org/x/sync/errgroup"
 
-	"github.com/liquidata-inc/dolt/go/store/chunks"
-	"github.com/liquidata-inc/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/dolthub/dolt/go/store/hash"
 )
 
 func WriteChunks(chunks []chunks.Chunk) (string, []byte, error) {
@@ -79,7 +78,7 @@ func newMemTable(memTableSize uint64) *memTable {
 
 func (mt *memTable) addChunk(h addr, data []byte) bool {
 	if len(data) == 0 {
-		panic("NBS blocks cannont be zero length")
+		panic("NBS blocks cannot be zero length")
 	}
 	if _, ok := mt.chunks[h]; ok {
 		return true
@@ -138,34 +137,33 @@ func (mt *memTable) get(ctx context.Context, h addr, stats *Stats) ([]byte, erro
 	return mt.chunks[h], nil
 }
 
-func (mt *memTable) getMany(ctx context.Context, reqs []getRecord, foundChunks chan<- *chunks.Chunk, wg *sync.WaitGroup, ae *atomicerr.AtomicError, stats *Stats) bool {
+func (mt *memTable) getMany(ctx context.Context, eg *errgroup.Group, reqs []getRecord, found func(*chunks.Chunk), stats *Stats) (bool, error) {
 	var remaining bool
 	for _, r := range reqs {
 		data := mt.chunks[*r.a]
 		if data != nil {
 			c := chunks.NewChunkWithHash(hash.Hash(*r.a), data)
-			foundChunks <- &c
+			found(&c)
 		} else {
 			remaining = true
 		}
 	}
-
-	return remaining
+	return remaining, nil
 }
 
-func (mt *memTable) getManyCompressed(ctx context.Context, reqs []getRecord, foundCmpChunks chan<- CompressedChunk, wg *sync.WaitGroup, ae *atomicerr.AtomicError, stats *Stats) bool {
+func (mt *memTable) getManyCompressed(ctx context.Context, eg *errgroup.Group, reqs []getRecord, found func(CompressedChunk), stats *Stats) (bool, error) {
 	var remaining bool
 	for _, r := range reqs {
 		data := mt.chunks[*r.a]
 		if data != nil {
 			c := chunks.NewChunkWithHash(hash.Hash(*r.a), data)
-			foundCmpChunks <- ChunkToCompressedChunk(c)
+			found(ChunkToCompressedChunk(c))
 		} else {
 			remaining = true
 		}
 	}
 
-	return remaining
+	return remaining, nil
 }
 
 func (mt *memTable) extract(ctx context.Context, chunks chan<- extractRecord) error {

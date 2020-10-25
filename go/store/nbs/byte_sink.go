@@ -22,10 +22,10 @@ import (
 	"os"
 	"sync"
 
-	"github.com/liquidata-inc/dolt/go/store/util/tempfiles"
+	"github.com/dolthub/dolt/go/store/util/tempfiles"
 
-	"github.com/liquidata-inc/dolt/go/libraries/utils/iohelp"
-	"github.com/liquidata-inc/dolt/go/store/atomicerr"
+	"github.com/dolthub/dolt/go/libraries/utils/iohelp"
+	"github.com/dolthub/dolt/go/store/atomicerr"
 )
 
 func flushSinkToFile(sink ByteSink, path string) (err error) {
@@ -169,8 +169,8 @@ type BufferedFileByteSink struct {
 }
 
 // NewBufferedFileByteSink creates a BufferedFileByteSink
-func NewBufferedFileByteSink(blockSize, chBufferSize int) (*BufferedFileByteSink, error) {
-	f, err := tempfiles.MovableTempFileProvider.NewFile("", "buffered_file_byte_sink_")
+func NewBufferedFileByteSink(tempDir string, blockSize, chBufferSize int) (*BufferedFileByteSink, error) {
+	f, err := tempfiles.MovableTempFileProvider.NewFile(tempDir, "buffered_file_byte_sink_")
 
 	if err != nil {
 		return nil, err

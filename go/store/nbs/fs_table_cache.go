@@ -29,9 +29,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/liquidata-inc/dolt/go/store/atomicerr"
-	"github.com/liquidata-inc/dolt/go/store/util/sizecache"
-	"github.com/liquidata-inc/dolt/go/store/util/tempfiles"
+	"github.com/dolthub/dolt/go/store/atomicerr"
+	"github.com/dolthub/dolt/go/store/util/sizecache"
+	"github.com/dolthub/dolt/go/store/util/tempfiles"
 )
 
 type tableCache interface {
@@ -95,7 +95,7 @@ func (ftc *fsTableCache) init(concurrency int) error {
 				return errors.New(path + " is not a table file; cache dir must contain only table files")
 			}
 
-			ad, err := parseAddr([]byte(info.Name()))
+			ad, err := parseAddr(info.Name())
 
 			if err != nil {
 				return err

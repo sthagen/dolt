@@ -17,27 +17,26 @@ package sqle
 import (
 	"errors"
 
-	"github.com/liquidata-inc/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/table"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/table/typed/noms"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/table"
+	"github.com/dolthub/dolt/go/libraries/doltcore/table/typed/noms"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 type DoltIndex interface {
 	sql.Index
 	sql.AscendIndex
 	sql.DescendIndex
-	DoltDatabase() Database
 	Schema() schema.Schema
 	TableData() types.Map
 }
 
 type doltIndex struct {
 	cols         []schema.Column
-	db           Database
+	db           sql.Database
 	id           string
 	indexRowData types.Map
 	indexSch     schema.Schema
@@ -49,6 +48,7 @@ type doltIndex struct {
 	comment      string
 }
 
+//TODO: have queries using IS NULL make use of indexes
 var _ DoltIndex = (*doltIndex)(nil)
 
 var alwaysContinueRangeCheck noms.InRangeCheck = func(tuple types.Tuple) (bool, error) {
@@ -121,12 +121,7 @@ func (di *doltIndex) DescendRange(lessOrEqual, greaterOrEqual []interface{}) (sq
 
 // Database implement sql.Index
 func (di *doltIndex) Database() string {
-	return di.db.name
-}
-
-// DoltDatabase returns the dolt database that created this index.
-func (di *doltIndex) DoltDatabase() Database {
-	return di.db
+	return di.db.Name()
 }
 
 // Expressions implements sql.Index

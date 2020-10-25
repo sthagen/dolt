@@ -34,8 +34,9 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
 
-	"github.com/liquidata-inc/dolt/go/store/atomicerr"
-	"github.com/liquidata-inc/dolt/go/store/util/verbose"
+	"github.com/dolthub/dolt/go/store/atomicerr"
+	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/dolthub/dolt/go/store/util/verbose"
 )
 
 const (
@@ -602,4 +603,8 @@ func (s3p awsTablePersister) uploadPart(ctx context.Context, data []byte, key, u
 		etag = *res.ETag
 	}
 	return
+}
+
+func (s3p awsTablePersister) PruneTableFiles(ctx context.Context, contents manifestContents) error {
+	return chunks.ErrUnsupportedOperation
 }

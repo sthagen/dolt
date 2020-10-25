@@ -22,11 +22,11 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/liquidata-inc/dolt/go/store/atomicerr"
-	"github.com/liquidata-inc/dolt/go/store/chunks"
-	"github.com/liquidata-inc/dolt/go/store/hash"
-	"github.com/liquidata-inc/dolt/go/store/nbs"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/atomicerr"
+	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/nbs"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 type FileReaderWithSize struct {
@@ -63,7 +63,7 @@ type CmpChnkAndRefs struct {
 
 type NBSCompressedChunkStore interface {
 	chunks.ChunkStore
-	GetManyCompressed(context.Context, hash.HashSet, chan<- nbs.CompressedChunk) error
+	GetManyCompressed(context.Context, hash.HashSet, func(nbs.CompressedChunk)) error
 }
 
 // Puller is used to sync data between to Databases
@@ -160,7 +160,7 @@ func NewPuller(ctx context.Context, tempDir string, chunksPerTF int, srcDB, sink
 		return nil, ErrIncompatibleSourceChunkStore
 	}
 
-	wr, err := nbs.NewCmpChunkTableWriter()
+	wr, err := nbs.NewCmpChunkTableWriter(tempDir)
 
 	if err != nil {
 		return nil, err
@@ -338,7 +338,7 @@ func (p *Puller) getCmp(ctx context.Context, twDetails *TreeWalkEventDetails, le
 	ae := atomicerr.New()
 	go func() {
 		defer close(found)
-		err := p.srcChunkStore.GetManyCompressed(ctx, batch, found)
+		err := p.srcChunkStore.GetManyCompressed(ctx, batch, func(c nbs.CompressedChunk) { found <- c })
 		ae.SetIfError(err)
 	}()
 
@@ -403,7 +403,7 @@ func (p *Puller) getCmp(ctx context.Context, twDetails *TreeWalkEventDetails, le
 
 		if p.wr.Size() >= p.chunksPerTF {
 			completedTables <- FilledWriters{p.wr}
-			p.wr, err = nbs.NewCmpChunkTableWriter()
+			p.wr, err = nbs.NewCmpChunkTableWriter(p.tempDir)
 
 			if ae.SetIfError(err) {
 				continue

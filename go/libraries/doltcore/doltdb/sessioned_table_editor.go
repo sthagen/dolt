@@ -18,8 +18,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/row"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 // SessionedTableEditor represents a table editor obtained from a TableEditSession. This table editor may be shared
@@ -47,6 +47,12 @@ func (ste *SessionedTableEditor) GetIndexedRows(ctx context.Context, key types.T
 // GetRow on the returned table, but a tad faster.
 func (ste *SessionedTableEditor) GetRow(ctx context.Context, key types.Tuple) (row.Row, bool, error) {
 	return ste.tableEditor.GetRow(ctx, key)
+}
+
+// GetRowData returns the row data from the TableEditor. This is equivalent to calling Table and then
+// GetRowData on the returned table, but a tad faster.
+func (ste *SessionedTableEditor) GetRowData(ctx context.Context) (types.Map, error) {
+	return ste.tableEditor.GetRowData(ctx)
 }
 
 // Flush is a shortcut to calling SessionTableEditor.Flush.

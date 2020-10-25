@@ -18,25 +18,16 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 )
-
-//TODO: This is a relic from before `SHOW CREATE TABLE` was implemented. We should remove this file altogether.
-const TagCommentPrefix = "tag:"
 
 //  FmtCol converts a column to a string with a given indent space count, name width, and type width.  If nameWidth or
 // typeWidth are 0 or less than the length of the name or type, then the length of the name or type will be used
 func FmtCol(indent, nameWidth, typeWidth int, col schema.Column) string {
 	sqlType := col.TypeInfo.ToSqlType()
 	return FmtColWithNameAndType(indent, nameWidth, typeWidth, col.Name, sqlType.String(), col)
-}
-
-// FmtColWithTag follows the same logic as FmtCol, but includes the column's tag as a comment
-func FmtColWithTag(indent, nameWidth, typeWidth int, col schema.Column) string {
-	fc := FmtCol(indent, nameWidth, typeWidth, col)
-	return fmt.Sprintf("%s COMMENT '%s'", fc, FmtColTagComment(col.Tag))
 }
 
 // FmtColWithNameAndType creates a string representing a column within a sql create table statement with a given indent
@@ -60,6 +51,10 @@ func FmtColWithNameAndType(indent, nameWidth, typeWidth int, colName, typeStr st
 		colStr += " DEFAULT " + col.Default
 	}
 
+	if col.Comment != "" {
+		colStr += " COMMENT " + QuoteComment(col.Comment)
+	}
+
 	return colStr
 }
 
@@ -68,10 +63,6 @@ func FmtColWithNameAndType(indent, nameWidth, typeWidth int, colName, typeStr st
 func FmtColPrimaryKey(indent int, colStr string) string {
 	fmtStr := fmt.Sprintf("%%%ds PRIMARY KEY (%s)\n", indent, colStr)
 	return fmt.Sprintf(fmtStr, "")
-}
-
-func FmtColTagComment(tag uint64) string {
-	return fmt.Sprintf("%s%d", TagCommentPrefix, tag)
 }
 
 func FmtIndex(index schema.Index) string {
@@ -127,70 +118,6 @@ func FmtForeignKey(fk doltdb.ForeignKey, sch, parentSch schema.Schema) string {
 		sb.WriteString("\n    ON UPDATE ")
 		sb.WriteString(fk.OnUpdate.String())
 	}
-	return sb.String()
-}
-
-// CreateTableStmtWithTags generates a SQL CREATE TABLE command
-func CreateTableStmt(tableName string, sch schema.Schema, foreignKeys []doltdb.ForeignKey, parentSchs map[string]schema.Schema) string {
-	return createTableStmt(tableName, sch, func(col schema.Column) string {
-		return FmtCol(2, 0, 0, col)
-	}, foreignKeys, parentSchs)
-}
-
-// CreateTableStmtWithTags generates a SQL CREATE TABLE command that includes the column tags as comments
-func CreateTableStmtWithTags(tableName string, sch schema.Schema, foreignKeys []doltdb.ForeignKey, parentSchs map[string]schema.Schema) string {
-	return createTableStmt(tableName, sch, func(col schema.Column) string {
-		return FmtColWithTag(2, 0, 0, col)
-	}, foreignKeys, parentSchs)
-}
-
-type fmtColFunc func(col schema.Column) string
-
-func createTableStmt(tableName string, sch schema.Schema, fmtCol fmtColFunc, foreignKeys []doltdb.ForeignKey, parentSchs map[string]schema.Schema) string {
-
-	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("CREATE TABLE %s (\n", QuoteIdentifier(tableName)))
-
-	firstLine := true
-	_ = sch.GetAllCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
-		if firstLine {
-			firstLine = false
-		} else {
-			sb.WriteString(",\n")
-		}
-
-		s := fmtCol(col)
-		sb.WriteString(s)
-
-		return false, nil
-	})
-
-	firstPK := true
-	_ = sch.GetPKCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
-		if firstPK {
-			sb.WriteString(",\n  PRIMARY KEY (")
-			firstPK = false
-		} else {
-			sb.WriteRune(',')
-		}
-		sb.WriteString(QuoteIdentifier(col.Name))
-		return false, nil
-	})
-
-	sb.WriteRune(')')
-
-	for _, idx := range sch.Indexes().AllIndexes() {
-		sb.WriteString(",\n  ")
-		sb.WriteString(FmtIndex(idx))
-	}
-
-	for _, fk := range foreignKeys {
-		sb.WriteString(",\n  ")
-		sb.WriteString(FmtForeignKey(fk, sch, parentSchs[fk.ReferencedTableName]))
-	}
-
-	sb.WriteString("\n);")
-
 	return sb.String()
 }
 

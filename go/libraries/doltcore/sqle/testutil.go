@@ -21,12 +21,12 @@ import (
 	"io"
 	"strings"
 
-	sqle "github.com/liquidata-inc/go-mysql-server"
-	"github.com/liquidata-inc/go-mysql-server/sql"
-	"github.com/liquidata-inc/vitess/go/vt/sqlparser"
+	sqle "github.com/dolthub/go-mysql-server"
+	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/vitess/go/vt/sqlparser"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 )
 
 // Executes all the SQL non-select statements given in the string against the root value given and returns the updated
@@ -152,13 +152,13 @@ func ExecuteSelect(dEnv *env.DoltEnv, ddb *doltdb.DoltDB, root *doltdb.RootValue
 }
 
 func drainIter(iter sql.RowIter) error {
-	var returnedErr error
 	for {
 		_, err := iter.Next()
 		if err == io.EOF {
-			return returnedErr
+			break
 		} else if err != nil {
-			returnedErr = err
+			return err
 		}
 	}
+	return iter.Close()
 }

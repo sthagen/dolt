@@ -20,20 +20,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/liquidata-inc/go-mysql-server/enginetest"
-	"github.com/liquidata-inc/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/enginetest"
+	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/stretchr/testify/require"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/dtestutils"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle/dfunctions"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dtestutils"
+	"github.com/dolthub/dolt/go/libraries/doltcore/env"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dfunctions"
 )
 
 type DoltHarness struct {
-	t       *testing.T
-	session *sqle.DoltSession
-	mrEnv   env.MultiRepoEnv
+	t           *testing.T
+	session     *sqle.DoltSession
+	mrEnv       env.MultiRepoEnv
+	parallelism int
 }
 
 var _ enginetest.Harness = (*DoltHarness)(nil)
@@ -52,6 +53,14 @@ func newDoltHarness(t *testing.T) *DoltHarness {
 	}
 }
 
+// WithParallelism returns a copy of the harness with parallelism set to the given number of threads. A value of 0 or
+// less means to use the system parallelism settings.
+func (d *DoltHarness) WithParallelism(parallelism int) *DoltHarness {
+	nd := *d
+	nd.parallelism = parallelism
+	return &nd
+}
+
 // Logic to skip unsupported queries
 func (d *DoltHarness) SkipQueryTest(query string) bool {
 	lowerQuery := strings.ToLower(query)
@@ -59,18 +68,24 @@ func (d *DoltHarness) SkipQueryTest(query string) bool {
 		strings.Contains(lowerQuery, "show full columns") || // we set extra comment info
 		lowerQuery == "show variables" || // we set extra variables
 		strings.Contains(lowerQuery, "show create table") || // we set extra comment info
-		strings.Contains(lowerQuery, "show indexes from") // we create / expose extra indexes (for foreign keys)
+		strings.Contains(lowerQuery, "show indexes from") || // we create / expose extra indexes (for foreign keys)
+		strings.Contains(lowerQuery, "on duplicate key update") // not working yet
 }
 
 func (d *DoltHarness) Parallelism() int {
-	// always test with some parallelism
-	parallelism := runtime.NumCPU()
+	if d.parallelism <= 0 {
 
-	if parallelism <= 1 {
-		parallelism = 2
+		// always test with some parallelism
+		parallelism := runtime.NumCPU()
+
+		if parallelism <= 1 {
+			parallelism = 2
+		}
+
+		return parallelism
 	}
 
-	return parallelism
+	return d.parallelism
 }
 
 func (d *DoltHarness) NewContext() *sql.Context {

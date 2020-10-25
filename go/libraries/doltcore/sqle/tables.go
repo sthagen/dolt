@@ -24,17 +24,17 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/liquidata-inc/go-mysql-server/sql"
-	"github.com/liquidata-inc/vitess/go/sqltypes"
+	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/vitess/go/sqltypes"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema/alterschema"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema/encoding"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema/typeinfo"
-	sqleSchema "github.com/liquidata-inc/dolt/go/libraries/doltcore/sqle/schema"
-	"github.com/liquidata-inc/dolt/go/libraries/utils/set"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema/alterschema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema/encoding"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema/typeinfo"
+	sqleSchema "github.com/dolthub/dolt/go/libraries/doltcore/sqle/schema"
+	"github.com/dolthub/dolt/go/libraries/utils/set"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 const (
@@ -68,11 +68,12 @@ type DoltTable struct {
 	table  *doltdb.Table
 	sch    schema.Schema
 	sqlSch sql.Schema
-	db     Database
+	db     SqlDatabase
 }
 
 var _ sql.Table = (*DoltTable)(nil)
 var _ sql.IndexedTable = (*DoltTable)(nil)
+var _ sql.ForeignKeyTable = (*DoltTable)(nil)
 
 // WithIndexLookup implements sql.IndexedTable
 func (t *DoltTable) WithIndexLookup(lookup sql.IndexLookup) sql.Table {
@@ -219,6 +220,7 @@ func (t *DoltTable) PartitionRows(ctx *sql.Context, partition sql.Partition) (sq
 // WritableDoltTable allows updating, deleting, and inserting new rows. It implements sql.UpdatableTable and friends.
 type WritableDoltTable struct {
 	DoltTable
+	db Database
 	ed *sqlTableEditor
 }
 
@@ -226,6 +228,17 @@ var _ sql.UpdatableTable = (*WritableDoltTable)(nil)
 var _ sql.DeletableTable = (*WritableDoltTable)(nil)
 var _ sql.InsertableTable = (*WritableDoltTable)(nil)
 var _ sql.ReplaceableTable = (*WritableDoltTable)(nil)
+
+func (t *WritableDoltTable) WithIndexLookup(lookup sql.IndexLookup) sql.Table {
+	dil, ok := lookup.(*doltIndexLookup)
+	if !ok {
+		return newStaticErrorTable(t, fmt.Errorf("Unrecognized indexLookup %T", lookup))
+	}
+	return &WritableIndexedDoltTable{
+		WritableDoltTable: t,
+		indexLookup:       dil,
+	}
+}
 
 // Inserter implements sql.InsertableTable
 func (t *WritableDoltTable) Inserter(ctx *sql.Context) sql.RowInserter {
@@ -282,6 +295,45 @@ func (t *WritableDoltTable) Updater(ctx *sql.Context) sql.RowUpdater {
 		return newStaticErrorEditor(err)
 	}
 	return te
+}
+
+// GetForeignKeys implements sql.ForeignKeyTable
+func (t *DoltTable) GetForeignKeys(ctx *sql.Context) ([]sql.ForeignKeyConstraint, error) {
+	root, err := t.db.GetRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	fkc, err := root.GetForeignKeyCollection(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	declaredFk, _ := fkc.KeysForTable(t.name)
+	toReturn := make([]sql.ForeignKeyConstraint, len(declaredFk))
+
+	for i, fk := range declaredFk {
+		parent, ok, err := root.GetTable(ctx, fk.ReferencedTableName)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("cannot find table %s "+
+				"referenced in foreign key %s", fk.ReferencedTableName, fk.Name)
+		}
+
+		parentSch, err := parent.GetSchema(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		toReturn[i], err = toForeignKeyConstraint(fk, t.sch, parentSch)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return toReturn, nil
 }
 
 var _ sql.PartitionIter = singlePartitionIter{}
@@ -394,22 +446,16 @@ func (t *AlterableDoltTable) AddColumn(ctx *sql.Context, column *sql.Column, ord
 		return err
 	}
 
-	tag := sqleSchema.ExtractTag(column)
-	if tag == schema.InvalidTag {
-		// generate a tag if we don't have a user-defined tag
-		ti, err := typeinfo.FromSqlType(column.Type)
-		if err != nil {
-			return err
-		}
-
-		tt, err := root.GenerateTagsForNewColumns(ctx, t.name, []string{column.Name}, []types.NomsKind{ti.NomsKind()})
-		if err != nil {
-			return err
-		}
-		tag = tt[0]
+	ti, err := typeinfo.FromSqlType(column.Type)
+	if err != nil {
+		return err
+	}
+	tags, err := root.GenerateTagsForNewColumns(ctx, t.name, []string{column.Name}, []types.NomsKind{ti.NomsKind()})
+	if err != nil {
+		return err
 	}
 
-	col, err := sqleSchema.ToDoltCol(tag, column)
+	col, err := sqleSchema.ToDoltCol(tags[0], column)
 	if err != nil {
 		return err
 	}
@@ -423,7 +469,7 @@ func (t *AlterableDoltTable) AddColumn(ctx *sql.Context, column *sql.Column, ord
 		nullable = alterschema.Null
 	}
 
-	updatedTable, err := alterschema.AddColumnToTable(ctx, root, table, t.name, col.Tag, col.Name, col.TypeInfo, nullable, col.Default, orderToOrder(order))
+	updatedTable, err := alterschema.AddColumnToTable(ctx, root, table, t.name, col.Tag, col.Name, col.TypeInfo, nullable, col.Default, col.Comment, orderToOrder(order))
 	if err != nil {
 		return err
 	}
@@ -521,11 +567,6 @@ func (t *AlterableDoltTable) ModifyColumn(ctx *sql.Context, columnName string, c
 		panic(fmt.Sprintf("Column %s not found. This is a bug.", columnName))
 	}
 
-	tag := sqleSchema.ExtractTag(column)
-	if tag != existingCol.Tag && tag != schema.InvalidTag {
-		return errors.New("cannot change the tag of an existing column")
-	}
-
 	col, err := sqleSchema.ToDoltCol(existingCol.Tag, column)
 	if err != nil {
 		return err
@@ -558,7 +599,7 @@ func (t *AlterableDoltTable) ModifyColumn(ctx *sql.Context, columnName string, c
 
 // CreateIndex implements sql.IndexAlterableTable
 func (t *AlterableDoltTable) CreateIndex(ctx *sql.Context, indexName string, using sql.IndexUsing, constraint sql.IndexConstraint, columns []sql.IndexColumn, comment string) error {
-	newTable, _, _, err := createIndexForTable(ctx, t.table, indexName, using, constraint, columns, comment)
+	ret, err := createIndexForTable(ctx, t.table, indexName, using, constraint, columns, true, comment)
 	if err != nil {
 		return err
 	}
@@ -566,7 +607,31 @@ func (t *AlterableDoltTable) CreateIndex(ctx *sql.Context, indexName string, usi
 	if err != nil {
 		return err
 	}
-	newRoot, err := root.PutTable(ctx, t.name, newTable)
+	if ret.oldIndex != nil && ret.oldIndex != ret.newIndex { // old index was replaced, so we update foreign keys
+		fkc, err := root.GetForeignKeyCollection(ctx)
+		if err != nil {
+			return err
+		}
+		for _, fk := range fkc.AllKeys() {
+			newFk := fk
+			if t.name == fk.TableName && fk.TableIndex == ret.oldIndex.Name() {
+				newFk.TableIndex = ret.newIndex.Name()
+			}
+			if t.name == fk.ReferencedTableName && fk.ReferencedTableIndex == ret.oldIndex.Name() {
+				newFk.ReferencedTableIndex = ret.newIndex.Name()
+			}
+			fkc.RemoveKeys(fk)
+			err = fkc.AddKeys(newFk)
+			if err != nil {
+				return err
+			}
+		}
+		root, err = root.PutForeignKeyCollection(ctx, fkc)
+		if err != nil {
+			return err
+		}
+	}
+	newRoot, err := root.PutTable(ctx, t.name, ret.newTable)
 	if err != nil {
 		return err
 	}
@@ -628,6 +693,10 @@ func (t *AlterableDoltTable) RenameIndex(ctx *sql.Context, fromIndexName string,
 		return err
 	}
 	newTable, err := t.table.UpdateSchema(ctx, t.sch)
+	if err != nil {
+		return err
+	}
+	newTable, err = newTable.RenameIndexRowData(ctx, fromIndexName, toIndexName)
 	if err != nil {
 		return err
 	}
@@ -729,10 +798,12 @@ func (t *AlterableDoltTable) CreateForeignKey(
 	tableIndex, ok := t.sch.Indexes().GetIndexByTags(colTags...)
 	if !ok {
 		// if child index doesn't exist, create it
-		t.table, _, tableIndex, err = createIndexForTable(ctx, t.table, "", sql.IndexUsing_Default, sql.IndexConstraint_None, sqlColNames, "")
+		ret, err := createIndexForTable(ctx, t.table, "", sql.IndexUsing_Default, sql.IndexConstraint_None, sqlColNames, false, "")
 		if err != nil {
 			return err
 		}
+		t.table = ret.newTable
+		tableIndex = ret.newIndex
 		root, err = root.PutTable(ctx, t.name, t.table)
 		if err != nil {
 			return err
@@ -750,10 +821,12 @@ func (t *AlterableDoltTable) CreateForeignKey(
 				c, _ := refSch.GetAllCols().GetByTag(t)
 				colNames = append(colNames, sql.IndexColumn{Name: c.Name})
 			}
-			refTbl, _, refTableIndex, err = createIndexForTable(ctx, refTbl, "", sql.IndexUsing_Default, sql.IndexConstraint_None, colNames, "")
+			ret, err := createIndexForTable(ctx, refTbl, "", sql.IndexUsing_Default, sql.IndexConstraint_None, colNames, false, "")
 			if err != nil {
 				return err
 			}
+			refTbl = ret.newTable
+			refTableIndex = ret.newIndex
 			root, err = root.PutTable(ctx, refTblName, refTbl)
 			if err != nil {
 				return err
@@ -831,45 +904,6 @@ func (t *AlterableDoltTable) DropForeignKey(ctx *sql.Context, fkName string) err
 	return t.updateFromRoot(ctx, newRoot)
 }
 
-// GetForeignKeys implements sql.ForeignKeyTable
-func (t *AlterableDoltTable) GetForeignKeys(ctx *sql.Context) ([]sql.ForeignKeyConstraint, error) {
-	root, err := t.db.GetRoot(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	fkc, err := root.GetForeignKeyCollection(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	declaredFk, _ := fkc.KeysForTable(t.name)
-	toReturn := make([]sql.ForeignKeyConstraint, len(declaredFk))
-
-	for i, fk := range declaredFk {
-		parent, ok, err := root.GetTable(ctx, fk.ReferencedTableName)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, fmt.Errorf("cannot find table %s "+
-				"referenced in foreign key %s", fk.ReferencedTableName, fk.Name)
-		}
-
-		parentSch, err := parent.GetSchema(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		toReturn[i], err = toForeignKeyConstraint(fk, t.sch, parentSch)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return toReturn, nil
-}
-
 func toForeignKeyConstraint(fk doltdb.ForeignKey, childSch, parentSch schema.Schema) (cst sql.ForeignKeyConstraint, err error) {
 	cst = sql.ForeignKeyConstraint{
 		Name:              fk.Name,
@@ -938,15 +972,31 @@ func parseFkReferenceOption(refOp sql.ForeignKeyReferenceOption) (doltdb.Foreign
 	}
 }
 
+type createIndexReturn struct {
+	newTable *doltdb.Table
+	sch      schema.Schema
+	oldIndex schema.Index
+	newIndex schema.Index
+}
+
 // createIndex creates the given index on the given table with the given schema. Returns the updated table, updated schema, and created index.
-func createIndexForTable(ctx *sql.Context, table *doltdb.Table, indexName string, using sql.IndexUsing, constraint sql.IndexConstraint, columns []sql.IndexColumn, comment string) (*doltdb.Table, schema.Schema, schema.Index, error) {
+func createIndexForTable(
+	ctx *sql.Context,
+	table *doltdb.Table,
+	indexName string,
+	using sql.IndexUsing,
+	constraint sql.IndexConstraint,
+	columns []sql.IndexColumn,
+	isUserDefined bool,
+	comment string,
+) (*createIndexReturn, error) {
 	if constraint != sql.IndexConstraint_None && constraint != sql.IndexConstraint_Unique {
-		return nil, nil, nil, fmt.Errorf("not yet supported")
+		return nil, fmt.Errorf("not yet supported")
 	}
 
 	sch, err := table.GetSchema(ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	// get the real column names as CREATE INDEX columns are case-insensitive
@@ -955,7 +1005,7 @@ func createIndexForTable(ctx *sql.Context, table *doltdb.Table, indexName string
 	for _, indexCol := range columns {
 		tableCol, ok := allTableCols.GetByNameCaseInsensitive(indexCol.Name)
 		if !ok {
-			return nil, nil, nil, fmt.Errorf("column `%s` does not exist for the table", indexCol.Name)
+			return nil, fmt.Errorf("column `%s` does not exist for the table", indexCol.Name)
 		}
 		realColNames = append(realColNames, tableCol.Name)
 	}
@@ -971,43 +1021,77 @@ func createIndexForTable(ctx *sql.Context, table *doltdb.Table, indexName string
 		}
 	}
 	if !doltdb.IsValidTableName(indexName) {
-		return nil, nil, nil, fmt.Errorf("invalid index name `%s` as they must match the regular expression %s", indexName, doltdb.TableNameRegexStr)
+		return nil, fmt.Errorf("invalid index name `%s` as they must match the regular expression %s", indexName, doltdb.TableNameRegexStr)
+	}
+
+	// if an index was already created for the column set but was not generated by the user then we replace it
+	replacingIndex := false
+	existingIndex, ok := sch.Indexes().GetIndexByColumnNames(realColNames...)
+	if ok && !existingIndex.IsUserDefined() {
+		replacingIndex = true
+		_, err = sch.Indexes().RemoveIndex(existingIndex.Name())
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// create the index metadata, will error if index names are taken or an index with the same columns in the same order exists
-	index, err := sch.Indexes().AddIndexByColNames(indexName, realColNames, schema.IndexProperties{IsUnique: constraint == sql.IndexConstraint_Unique, Comment: comment})
+	index, err := sch.Indexes().AddIndexByColNames(
+		indexName,
+		realColNames,
+		schema.IndexProperties{
+			IsUnique:      constraint == sql.IndexConstraint_Unique,
+			IsUserDefined: isUserDefined,
+			Comment:       comment,
+		},
+	)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	// update the table schema with the new index
 	newSchemaVal, err := encoding.MarshalSchemaAsNomsValue(ctx, table.ValueReadWriter(), sch)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	tableRowData, err := table.GetRowData(ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	indexData, err := table.GetIndexData(ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	newTable, err := doltdb.NewTable(ctx, table.ValueReadWriter(), newSchemaVal, tableRowData, &indexData)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
-	// set the index row data and get a new root with the updated table
-	indexRowData, err := newTable.RebuildIndexRowData(ctx, index.Name())
-	if err != nil {
-		return nil, nil, nil, err
+	if replacingIndex { // verify that the pre-existing index data is valid
+		newTable, err = newTable.RenameIndexRowData(ctx, existingIndex.Name(), index.Name())
+		if err != nil {
+			return nil, err
+		}
+		err = newTable.VerifyIndexRowData(ctx, index.Name())
+		if err != nil {
+			return nil, err
+		}
+	} else { // set the index row data and get a new root with the updated table
+		indexRowData, err := newTable.RebuildIndexRowData(ctx, index.Name())
+		if err != nil {
+			return nil, err
+		}
+		newTable, err = newTable.SetIndexRowData(ctx, index.Name(), indexRowData)
+		if err != nil {
+			return nil, err
+		}
 	}
-	newTable, err = newTable.SetIndexRowData(ctx, index.Name(), indexRowData)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return newTable, sch, index, nil
+	return &createIndexReturn{
+		newTable: newTable,
+		sch:      sch,
+		oldIndex: existingIndex,
+		newIndex: index,
+	}, nil
 }
 
 // dropIndex drops the given index on the given table with the given schema. Returns the updated table and updated schema.
@@ -1040,7 +1124,12 @@ func (t *AlterableDoltTable) updateFromRoot(ctx *sql.Context, root *doltdb.RootV
 	if !ok {
 		return fmt.Errorf("table `%s` cannot find itself", t.name)
 	}
-	updatedTable := updatedTableSql.(*AlterableDoltTable)
+	var updatedTable *AlterableDoltTable
+	if doltdb.HasDoltPrefix(t.name) && !doltdb.IsReadOnlySystemTable(t.name) {
+		updatedTable = &AlterableDoltTable{*updatedTableSql.(*WritableDoltTable)}
+	} else {
+		updatedTable = updatedTableSql.(*AlterableDoltTable)
+	}
 	t.WritableDoltTable.DoltTable = updatedTable.WritableDoltTable.DoltTable
 	return nil
 }

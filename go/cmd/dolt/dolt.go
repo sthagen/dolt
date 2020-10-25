@@ -25,24 +25,24 @@ import (
 	"github.com/fatih/color"
 	"github.com/pkg/profile"
 
-	"github.com/liquidata-inc/dolt/go/cmd/dolt/cli"
-	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands"
-	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/cnfcmds"
-	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/credcmds"
-	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/indexcmds"
-	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/schcmds"
-	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/sqlserver"
-	"github.com/liquidata-inc/dolt/go/cmd/dolt/commands/tblcmds"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/dbfactory"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/doltdb"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/env"
-	"github.com/liquidata-inc/dolt/go/libraries/events"
-	"github.com/liquidata-inc/dolt/go/libraries/utils/filesys"
-	"github.com/liquidata-inc/dolt/go/store/util/tempfiles"
+	"github.com/dolthub/dolt/go/cmd/dolt/cli"
+	"github.com/dolthub/dolt/go/cmd/dolt/commands"
+	"github.com/dolthub/dolt/go/cmd/dolt/commands/cnfcmds"
+	"github.com/dolthub/dolt/go/cmd/dolt/commands/credcmds"
+	"github.com/dolthub/dolt/go/cmd/dolt/commands/indexcmds"
+	"github.com/dolthub/dolt/go/cmd/dolt/commands/schcmds"
+	"github.com/dolthub/dolt/go/cmd/dolt/commands/sqlserver"
+	"github.com/dolthub/dolt/go/cmd/dolt/commands/tblcmds"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/env"
+	"github.com/dolthub/dolt/go/libraries/events"
+	"github.com/dolthub/dolt/go/libraries/utils/filesys"
+	"github.com/dolthub/dolt/go/store/util/tempfiles"
 )
 
 const (
-	Version = "0.18.2"
+	Version = "0.21.0"
 )
 
 var dumpDocsCommand = &commands.DumpDocsCmd{}
@@ -54,6 +54,7 @@ var doltCommand = cli.NewSubCommandHandler("dolt", "it's git for data", []cli.Co
 	commands.CommitCmd{},
 	commands.SqlCmd{VersionStr: Version},
 	sqlserver.SqlServerCmd{VersionStr: Version},
+	sqlserver.SqlClientCmd{},
 	commands.LogCmd{},
 	commands.DiffCmd{},
 	commands.BlameCmd{},
@@ -79,6 +80,7 @@ var doltCommand = cli.NewSubCommandHandler("dolt", "it's git for data", []cli.Co
 	commands.MigrateCmd{},
 	indexcmds.Commands,
 	commands.ReadTablesCmd{},
+	commands.GarbageCollectionCmd{},
 })
 
 func init() {
@@ -237,6 +239,7 @@ func commandNeedsMigrationCheck(args []string) bool {
 		commands.CommitCmd{},
 		commands.SqlCmd{},
 		sqlserver.SqlServerCmd{},
+		sqlserver.SqlClientCmd{},
 		commands.DiffCmd{},
 		commands.MergeCmd{},
 		commands.BranchCmd{},

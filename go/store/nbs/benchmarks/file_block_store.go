@@ -29,8 +29,8 @@ import (
 
 	"github.com/dustin/go-humanize"
 
-	"github.com/liquidata-inc/dolt/go/store/chunks"
-	"github.com/liquidata-inc/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/dolthub/dolt/go/store/hash"
 )
 
 type fileBlockStore struct {
@@ -46,7 +46,7 @@ func (fb fileBlockStore) Get(ctx context.Context, h hash.Hash) (chunks.Chunk, er
 	panic("not impl")
 }
 
-func (fb fileBlockStore) GetMany(ctx context.Context, hashes hash.HashSet, foundChunks chan<- *chunks.Chunk) error {
+func (fb fileBlockStore) GetMany(ctx context.Context, hashes hash.HashSet, found func(*chunks.Chunk)) error {
 	panic("not impl")
 }
 

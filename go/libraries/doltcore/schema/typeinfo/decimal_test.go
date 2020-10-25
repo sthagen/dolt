@@ -20,12 +20,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liquidata-inc/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 func TestDecimalConvertNomsValueToValue(t *testing.T) {
@@ -70,18 +70,6 @@ func TestDecimalConvertNomsValueToValue(t *testing.T) {
 			types.Decimal(decimal.RequireFromString("4723245.01")),
 			"4723245.01",
 			false,
-		},
-		{
-			generateDecimalType(t, 9, 2),
-			types.Decimal(decimal.RequireFromString("14723245.01")),
-			"",
-			true,
-		},
-		{
-			generateDecimalType(t, 5, 4),
-			types.Decimal(decimal.RequireFromString("55.7159")),
-			"",
-			true,
 		},
 	}
 
@@ -198,18 +186,6 @@ func TestDecimalFormatValue(t *testing.T) {
 			types.Decimal(decimal.RequireFromString("4723245.01")),
 			"4723245.01",
 			false,
-		},
-		{
-			generateDecimalType(t, 9, 2),
-			types.Decimal(decimal.RequireFromString("14723245.01")),
-			"",
-			true,
-		},
-		{
-			generateDecimalType(t, 5, 4),
-			types.Decimal(decimal.RequireFromString("55.7159")),
-			"",
-			true,
 		},
 	}
 

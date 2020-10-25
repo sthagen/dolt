@@ -26,8 +26,84 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/liquidata-inc/dolt/go/store/d"
+	"github.com/dolthub/dolt/go/store/d"
 )
+
+var _ LesserValuable = TupleValueSlice(nil)
+
+type TupleValueSlice []Value
+
+func (tvs TupleValueSlice) Iter(cb func(tag uint64, val Value) (stop bool, err error)) error {
+	l := len(tvs)
+	for i := 0; i < l; i += 2 {
+		stop, err := cb(uint64(tvs[i].(Uint)), tvs[i+1])
+
+		if err != nil {
+			return err
+		}
+
+		if stop {
+			break
+		}
+	}
+
+	return nil
+}
+
+func (tvs TupleValueSlice) Kind() NomsKind {
+	return TupleKind
+}
+
+func (tvs TupleValueSlice) Less(nbf *NomsBinFormat, other LesserValuable) (bool, error) {
+	switch typedOther := other.(type) {
+	case Tuple:
+		val, err := NewTuple(nbf, tvs...)
+
+		if err != nil {
+			return false, err
+		}
+
+		return typedOther.Less(nbf, val)
+
+	case TupleValueSlice:
+		myLen := len(tvs)
+		otherLen := len(typedOther)
+		largerLen := myLen
+		if otherLen > largerLen {
+			largerLen = otherLen
+		}
+
+		var val Value
+		var otherVal Value
+		for i := 0; i < largerLen; i++ {
+			if i < myLen {
+				val = tvs[i]
+			}
+
+			if i < otherLen {
+				otherVal = typedOther[i]
+			}
+
+			if val == nil {
+				return true, nil
+			} else if otherVal == nil {
+				return false, nil
+			}
+
+			if !val.Equals(otherVal) {
+				return val.Less(nbf, otherVal)
+			}
+		}
+
+		return false, nil
+	default:
+		return TupleKind < other.Kind(), nil
+	}
+}
+
+func (tvs TupleValueSlice) Value(ctx context.Context) (Value, error) {
+	panic("not implemented")
+}
 
 func EmptyTuple(nbf *NomsBinFormat) Tuple {
 	t, err := NewTuple(nbf)
@@ -170,6 +246,34 @@ func (t Tuple) WalkValues(ctx context.Context, cb ValueCallback) error {
 	return nil
 }
 
+// PrefixEquals returns whether the given Tuple and calling Tuple have equivalent values up to the given count. Useful
+// for testing Tuple equality for partial keys. If the Tuples are not of the same length, and one Tuple's length is less
+// than the given count, then this returns false. If the Tuples are of the same length and they're both less than the
+// given count, then this function is equivalent to Equals.
+func (t Tuple) PrefixEquals(ctx context.Context, other Tuple, prefixCount uint64) (bool, error) {
+	tDec, tCount := t.decoderSkipToFields()
+	otherDec, otherCount := other.decoderSkipToFields()
+	if tCount == otherCount && tCount < prefixCount {
+		return t.Equals(other), nil
+	} else if tCount != otherCount && (tCount < prefixCount || otherCount < prefixCount) {
+		return false, nil
+	}
+	for i := uint64(0); i < prefixCount; i++ {
+		val, err := tDec.readValue(t.format())
+		if err != nil {
+			return false, err
+		}
+		otherVal, err := otherDec.readValue(t.format())
+		if err != nil {
+			return false, err
+		}
+		if !val.Equals(otherVal) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func (t Tuple) typeOf() (*Type, error) {
 	dec, count := t.decoderSkipToFields()
 	ts := make(typeSlice, 0, count)
@@ -246,6 +350,23 @@ func (t Tuple) IteratorAt(pos uint64) (*TupleIterator, error) {
 	}
 
 	return &TupleIterator{dec, count, pos, t.format()}, nil
+}
+
+func (t Tuple) AsSlice() (TupleValueSlice, error) {
+	dec, count := t.decoderSkipToFields()
+
+	sl := make(TupleValueSlice, count)
+	for pos := uint64(0); pos < count; pos++ {
+		val, err := dec.readValue(t.nbf)
+
+		if err != nil {
+			return nil, err
+		}
+
+		sl[pos] = val
+	}
+
+	return sl, nil
 }
 
 // IterFields iterates over the fields, calling cb for every field in the tuple until cb returns false
@@ -449,59 +570,27 @@ func (t Tuple) Less(nbf *NomsBinFormat, other LesserValuable) (bool, error) {
 	return TupleKind < other.Kind(), nil
 }
 
-// CountDifferencesBetweenTupleFields returns the number of fields that are different between two
-// tuples and does not panic if tuples are different lengths.
-func (t Tuple) CountDifferencesBetweenTupleFields(other Tuple) (uint64, error) {
-	changed := 0
-	tMap, err := t.fieldsToMap()
-	otherMap, err := other.fieldsToMap()
-
-	if err != nil {
-		return 0, err
-	}
-
-	for i, v := range tMap {
-		ov, ok := otherMap[i]
-		if !ok || !v.Equals(ov) {
-			changed++
-		}
-	}
-
-	for i := range otherMap {
-		if tMap[i] == nil {
-			changed++
-		}
-	}
-
-	return uint64(changed), nil
-}
-
-func (t Tuple) fieldsToMap() (map[Value]Value, error) {
-	valMap := make(map[Value]Value)
-
-	err := t.IterFields(func(index uint64, val Value) (stop bool, err error) {
-		if index%2 == 0 {
-			value, err := t.Get(index + 1)
-			if err != nil {
-				return true, err
-			}
-			valMap[val] = value
-		}
-
-		return false, nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return valMap, nil
-}
-
 func (t Tuple) StartsWith(otherTuple Tuple) bool {
 	tplDec, _ := t.decoderSkipToFields()
 	otherDec, _ := otherTuple.decoderSkipToFields()
 	return bytes.HasPrefix(tplDec.buff[tplDec.offset:], otherDec.buff[otherDec.offset:])
+}
+
+func (t Tuple) Contains(v Value) (bool, error) {
+	itr, err := t.Iterator()
+	if err != nil {
+		return false, err
+	}
+	for itr.HasMore() {
+		_, tupleVal, err := itr.Next()
+		if err != nil {
+			return false, err
+		}
+		if tupleVal.Equals(v) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (t Tuple) readFrom(nbf *NomsBinFormat, b *binaryNomsReader) (Value, error) {

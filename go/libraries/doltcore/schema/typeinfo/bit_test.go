@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 func TestBitConvertNomsValueToValue(t *testing.T) {
@@ -56,18 +56,6 @@ func TestBitConvertNomsValueToValue(t *testing.T) {
 			math.MaxUint64,
 			math.MaxUint64,
 			false,
-		},
-		{
-			generateBitType(t, 1),
-			7,
-			0,
-			true,
-		},
-		{
-			generateBitType(t, 10),
-			374562394,
-			0,
-			true,
 		},
 	}
 
@@ -160,18 +148,6 @@ func TestBitFormatValue(t *testing.T) {
 			math.MaxUint64,
 			strconv.FormatUint(math.MaxUint64, 10),
 			false,
-		},
-		{
-			generateBitType(t, 1),
-			7,
-			"",
-			true,
-		},
-		{
-			generateBitType(t, 10),
-			374562394,
-			"",
-			true,
 		},
 	}
 

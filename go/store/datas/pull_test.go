@@ -33,11 +33,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/liquidata-inc/dolt/go/store/chunks"
-	"github.com/liquidata-inc/dolt/go/store/d"
-	"github.com/liquidata-inc/dolt/go/store/hash"
-	"github.com/liquidata-inc/dolt/go/store/nbs"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/dolthub/dolt/go/store/d"
+	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/nbs"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 const datasetID = "ds1"
@@ -412,6 +412,8 @@ type TestTableFileStore struct {
 	tableFiles map[string]*TestTableFile
 }
 
+var _ nbs.TableFileStore = &TestTableFileStore{}
+
 func (ttfs *TestTableFileStore) Sources(ctx context.Context) (hash.Hash, []nbs.TableFile, error) {
 	var tblFiles []nbs.TableFile
 	for _, tblFile := range ttfs.tableFiles {
@@ -450,6 +452,10 @@ func (ttfs *TestTableFileStore) SupportedOperations() nbs.TableFileStoreOps {
 		CanRead:  true,
 		CanWrite: true,
 	}
+}
+
+func (ttfs *TestTableFileStore) PruneTableFiles(ctx context.Context) error {
+	return chunks.ErrUnsupportedOperation
 }
 
 func TestClone(t *testing.T) {

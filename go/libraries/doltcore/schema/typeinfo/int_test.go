@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 func TestIntConvertNomsValueToValue(t *testing.T) {
@@ -62,24 +62,6 @@ func TestIntConvertNomsValueToValue(t *testing.T) {
 			math.MaxInt64,
 			int64(math.MaxInt64),
 			false,
-		},
-		{
-			Int8Type,
-			-200,
-			0,
-			true,
-		},
-		{
-			Int32Type,
-			math.MaxInt64,
-			0,
-			true,
-		},
-		{
-			Int24Type,
-			1 << 25,
-			0,
-			true,
 		},
 	}
 
@@ -190,18 +172,6 @@ func TestIntFormatValue(t *testing.T) {
 			math.MaxInt64,
 			strconv.FormatInt(math.MaxInt64, 10),
 			false,
-		},
-		{
-			Int32Type,
-			math.MaxInt64,
-			"",
-			true,
-		},
-		{
-			Int24Type,
-			1 << 25,
-			"",
-			true,
 		},
 	}
 

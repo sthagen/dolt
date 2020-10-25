@@ -17,9 +17,9 @@ package rowconv
 import (
 	"errors"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/row"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 // ColNamingFunc defines a function signature which takes the name of a column, and returns the name that should be used
@@ -73,7 +73,7 @@ func NewJoiner(namedSchemas []NamedSchema, namers map[string]ColNamingFunc) (*Jo
 		allCols.IterInSortedOrder(func(srcTag uint64, col schema.Column) (stop bool) {
 			newColName := namer(col.Name)
 			var newCol schema.Column
-			newCol, err = schema.NewColumnWithTypeInfo(newColName, destTag, col.TypeInfo, false, col.Default)
+			newCol, err = schema.NewColumnWithTypeInfo(newColName, destTag, col.TypeInfo, false, col.Default, col.Comment)
 			if err != nil {
 				return true
 			}

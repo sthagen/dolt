@@ -20,11 +20,11 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema/encoding"
-	"github.com/liquidata-inc/dolt/go/store/hash"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/row"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema/encoding"
+	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 const (
@@ -695,6 +695,68 @@ func (t *Table) DeleteIndexRowData(ctx context.Context, indexName string) (*Tabl
 	}
 
 	return t.SetIndexData(ctx, indexesMap)
+}
+
+// RenameIndexRowData changes the name for the index data. Does not verify that the new name is unoccupied. If the old
+// name does not exist, then this returns the called table without error.
+func (t *Table) RenameIndexRowData(ctx context.Context, oldIndexName, newIndexName string) (*Table, error) {
+	indexesMap, err := t.GetIndexData(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	oldKey := types.String(oldIndexName)
+	newKey := types.String(newIndexName)
+	if indexRowData, ok, err := indexesMap.MaybeGet(ctx, oldKey); err != nil {
+		return nil, err
+	} else if ok {
+		indexesMap, err = indexesMap.Edit().Set(newKey, indexRowData).Remove(oldKey).Map(ctx)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		return t, nil
+	}
+
+	return t.SetIndexData(ctx, indexesMap)
+}
+
+// VerifyIndexRowData verifies that the index with the given name's data matches what the index expects.
+func (t *Table) VerifyIndexRowData(ctx context.Context, indexName string) error {
+	sch, err := t.GetSchema(ctx)
+	if err != nil {
+		return err
+	}
+
+	index := sch.Indexes().GetByName(indexName)
+	if index == nil {
+		return fmt.Errorf("index `%s` does not exist", indexName)
+	}
+
+	indexesMap, err := t.GetIndexData(ctx)
+	if err != nil {
+		return err
+	}
+
+	indexMapRef, ok, err := indexesMap.MaybeGet(ctx, types.String(indexName))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("index `%s` is missing its data", indexName)
+	}
+
+	indexMapValue, err := indexMapRef.(types.Ref).TargetValue(ctx, t.vrw)
+	if err != nil {
+		return err
+	}
+
+	iter, err := indexMapValue.(types.Map).Iterator(ctx)
+	if err != nil {
+		return err
+	}
+
+	return index.VerifyMap(ctx, iter, indexMapValue.(types.Map).Format())
 }
 
 func rebuildIndexRowData(ctx context.Context, vrw types.ValueReadWriter, sch schema.Schema, tblRowData types.Map, index schema.Index) (types.Map, error) {

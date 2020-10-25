@@ -22,11 +22,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/dbfactory"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema/encoding"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
+	"github.com/dolthub/dolt/go/libraries/doltcore/row"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema/encoding"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 var id0, _ = uuid.NewRandom()
@@ -547,7 +547,7 @@ func rowsToIndexRows(t *testing.T, rows []row.Row, indexName schema.Index, index
 
 // DO NOT CHANGE THIS TEST
 // It is necessary to ensure consistent system table definitions
-// for more info: https://github.com/liquidata-inc/dolt/pull/663
+// for more info: https://github.com/dolthub/dolt/pull/663
 func TestSystemTableTags(t *testing.T) {
 	var sysTableMin uint64 = 1 << 51
 
@@ -578,9 +578,10 @@ func TestSystemTableTags(t *testing.T) {
 		assert.Equal(t, queryCatalogMin+4, QueryCatalogDescriptionTag)
 	})
 	t.Run("dolt_schemas tags", func(t *testing.T) {
-		doltSchemasMin := sysTableMin + uint64(4003)
-		assert.Equal(t, doltSchemasMin+0, DoltSchemasTypeTag)
-		assert.Equal(t, doltSchemasMin+1, DoltSchemasNameTag)
-		assert.Equal(t, doltSchemasMin+2, DoltSchemasFragmentTag)
+		doltSchemasMin := sysTableMin + uint64(4007)
+		assert.Equal(t, doltSchemasMin+0, DoltSchemasIdTag)
+		assert.Equal(t, doltSchemasMin+1, DoltSchemasTypeTag)
+		assert.Equal(t, doltSchemasMin+2, DoltSchemasNameTag)
+		assert.Equal(t, doltSchemasMin+3, DoltSchemasFragmentTag)
 	})
 }

@@ -22,11 +22,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/dbfactory"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/row"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema"
-	"github.com/liquidata-inc/dolt/go/libraries/doltcore/schema/encoding"
-	"github.com/liquidata-inc/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
+	"github.com/dolthub/dolt/go/libraries/doltcore/row"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema/encoding"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 // The number of times we will loop through the tests to ensure consistent results
@@ -294,4 +294,84 @@ func TestTableEditorWriteAfterFlush(t *testing.T) {
 	sameTableData, err := sameTable.GetRowData(context.Background())
 	require.NoError(t, err)
 	assert.True(t, sameTableData.Equals(newTableData))
+}
+
+func TestTableEditorDuplicateKeyHandling(t *testing.T) {
+	format := types.Format_7_18
+	db, err := dbfactory.MemFactory{}.CreateDB(context.Background(), format, nil, nil)
+	require.NoError(t, err)
+	colColl, err := schema.NewColCollection(
+		schema.NewColumn("pk", 0, types.IntKind, true),
+		schema.NewColumn("v1", 1, types.IntKind, false),
+		schema.NewColumn("v2", 2, types.IntKind, false))
+	require.NoError(t, err)
+	tableSch := schema.SchemaFromCols(colColl)
+	tableSchVal, err := encoding.MarshalSchemaAsNomsValue(context.Background(), db, tableSch)
+	require.NoError(t, err)
+	emptyMap, err := types.NewMap(context.Background(), db)
+	require.NoError(t, err)
+	table, err := NewTable(context.Background(), db, tableSchVal, emptyMap, nil)
+	require.NoError(t, err)
+
+	tableEditor, err := NewTableEditor(context.Background(), table, tableSch)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		dRow, err := row.New(format, tableSch, row.TaggedValues{
+			0: types.Int(i),
+			1: types.Int(i),
+			2: types.Int(i),
+		})
+		require.NoError(t, err)
+		require.NoError(t, tableEditor.InsertRow(context.Background(), dRow))
+	}
+
+	_, err = tableEditor.Table()
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		dRow, err := row.New(format, tableSch, row.TaggedValues{
+			0: types.Int(i),
+			1: types.Int(i),
+			2: types.Int(i),
+		})
+		require.NoError(t, err)
+		require.NoError(t, tableEditor.InsertRow(context.Background(), dRow))
+	}
+
+	_, err = tableEditor.Table()
+	require.Error(t, err)
+	_, err = tableEditor.Table()
+	require.NoError(t, err)
+
+	for i := 3; i < 10; i++ {
+		dRow, err := row.New(format, tableSch, row.TaggedValues{
+			0: types.Int(i),
+			1: types.Int(i),
+			2: types.Int(i),
+		})
+		require.NoError(t, err)
+		require.NoError(t, tableEditor.InsertRow(context.Background(), dRow))
+	}
+
+	newTable, err := tableEditor.Table()
+	require.NoError(t, err)
+	newTableData, err := newTable.GetRowData(context.Background())
+	require.NoError(t, err)
+	if assert.Equal(t, uint64(10), newTableData.Len()) {
+		iterIndex := 0
+		_ = newTableData.IterAll(context.Background(), func(key, value types.Value) error {
+			dReadRow, err := row.FromNoms(tableSch, key.(types.Tuple), value.(types.Tuple))
+			require.NoError(t, err)
+			dReadVals, err := row.GetTaggedVals(dReadRow)
+			require.NoError(t, err)
+			assert.Equal(t, row.TaggedValues{
+				0: types.Int(iterIndex),
+				1: types.Int(iterIndex),
+				2: types.Int(iterIndex),
+			}, dReadVals)
+			iterIndex++
+			return nil
+		})
+	}
 }

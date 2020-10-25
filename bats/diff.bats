@@ -411,3 +411,47 @@ SQL
     [ $status -eq 0 ]
     [ $output -eq $CORRECT_DIFF ]
 }
+
+@test "diff with invalid ref does not panic" {
+    dolt add .
+    dolt commit -m table
+    dolt checkout -b test-branch
+    dolt sql -q "insert into test values (0, 0, 0, 0, 0, 0)"
+    dolt add test
+    dolt commit -m "added row"
+    FIRST_COMMIT=`dolt log | grep commit | cut -d " " -f 2 | tail -1`
+    run dolt diff $FIRST_COMMIT test-branch
+    [ $status -eq 0 ]
+    [[ ! $output =~ "panic" ]]
+    run dolt diff master@$FIRST_COMMIT test-branch
+    [ $status -eq 1 ]
+    [[ ! $output =~ "panic" ]]
+    run dolt diff ref.with.period test-branch
+    [ $status -eq 1 ]
+    [[ ! $output =~ "panic" ]]
+}
+
+@test "diff with foreign key and sql output" {
+    dolt sql <<SQL
+CREATE TABLE parent (
+  id int PRIMARY KEY,
+  pv1 int,
+  pv2 int,
+  INDEX v1 (pv1),
+  INDEX v2 (pv2)
+);
+SQL
+    dolt add -A
+    dolt commit -m "hi"
+    dolt sql <<SQL
+CREATE TABLE child (
+  id int primary key,
+  cv1 int,
+  cv2 int,
+  CONSTRAINT fk_named FOREIGN KEY (cv1) REFERENCES parent(pv1)
+);
+SQL
+    run dolt diff -s -r=sql master
+    [ $status -eq 0 ]
+    [[ $output =~ "CONSTRAINT \`fk_named\` FOREIGN KEY (\`cv1\`) REFERENCES \`parent\` (\`pv1\`)" ]] || false
+}

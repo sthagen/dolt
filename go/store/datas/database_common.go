@@ -26,12 +26,12 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/liquidata-inc/dolt/go/store/chunks"
-	"github.com/liquidata-inc/dolt/go/store/d"
-	"github.com/liquidata-inc/dolt/go/store/hash"
-	"github.com/liquidata-inc/dolt/go/store/merge"
-	"github.com/liquidata-inc/dolt/go/store/types"
-	"github.com/liquidata-inc/dolt/go/store/util/random"
+	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/dolthub/dolt/go/store/d"
+	"github.com/dolthub/dolt/go/store/hash"
+	"github.com/dolthub/dolt/go/store/merge"
+	"github.com/dolthub/dolt/go/store/types"
+	"github.com/dolthub/dolt/go/store/util/random"
 )
 
 type database struct {
@@ -60,6 +60,12 @@ func newDatabase(cs chunks.ChunkStore) *database {
 		rt:         vs,
 	}
 }
+
+var _ Database = &database{}
+var _ GarbageCollector = &database{}
+
+var _ rootTracker = &types.ValueStore{}
+var _ GarbageCollector = &types.ValueStore{}
 
 func (db *database) chunkStore() chunks.ChunkStore {
 	return db.ChunkStore()
@@ -361,7 +367,7 @@ func (db *database) doCommit(ctx context.Context, datasetID string, commit types
 					return err
 				}
 
-				ancestorRef, found, err := FindCommonAncestor(ctx, commitRef, currentHeadRef, db)
+				ancestorRef, found, err := FindCommonAncestor(ctx, commitRef, currentHeadRef, db, db)
 
 				if err != nil {
 					return err
@@ -496,7 +502,7 @@ func (db *database) doTag(ctx context.Context, datasetID string, tag types.Struc
 		}
 
 		if hasHead {
-			return fmt.Errorf("datasets for tags (refs/tags/*) cannot be altered after creation")
+			return fmt.Errorf(fmt.Sprintf("tag %s already exists and cannot be altered after creation", datasetID))
 		}
 
 		ref, err := types.ToRefOfValue(tagRef, db.Format())
@@ -573,6 +579,11 @@ func (db *database) doDelete(ctx context.Context, datasetIDstr string) error {
 		}
 	}
 	return err
+}
+
+// GC traverses the database starting at the Root and removes all unreferenced data from persistent storage.
+func (db *database) GC(ctx context.Context) error {
+	return db.ValueStore.GC(ctx)
 }
 
 func (db *database) tryCommitChunks(ctx context.Context, currentDatasets types.Map, currentRootHash hash.Hash) error {

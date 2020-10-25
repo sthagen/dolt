@@ -24,7 +24,7 @@ package types
 import (
 	"errors"
 
-	"github.com/liquidata-inc/dolt/go/store/d"
+	"github.com/dolthub/dolt/go/store/d"
 )
 
 var ErrUnknownType = errors.New("unknown type")
@@ -460,7 +460,7 @@ func (r *valueDecoder) readTypeOfValue(nbf *NomsBinFormat) (*Type, error) {
 	}
 
 	if IsPrimitiveKind(k) {
-		if emptyVal, ok := KindToType[k]; ok {
+		if emptyVal := KindToType[k]; emptyVal != nil {
 			r.skipKind()
 			emptyVal.skip(nbf, &r.binaryNomsReader)
 			return PrimitiveTypeMap[k], nil
@@ -587,7 +587,7 @@ func (r *typedBinaryNomsReader) skipType() error {
 func (r *typedBinaryNomsReader) readTypeInner(seenStructs map[string]*Type) (*Type, error) {
 	k := r.readKind()
 
-	if _, supported := KindToType[k]; !supported {
+	if supported := SupportedKinds[k]; !supported {
 		return nil, ErrUnknownType
 	}
 
