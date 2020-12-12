@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -599,7 +599,11 @@ func (lvs *ValueStore) GC(ctx context.Context) error {
 		return res
 	}
 
-	walker := newParallelRefWalker(ctx, lvs.nbf, runtime.GOMAXPROCS(0)-1)
+	concurrency := runtime.GOMAXPROCS(0) - 1
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	walker := newParallelRefWalker(ctx, lvs.nbf, concurrency)
 
 	eg.Go(func() error {
 		toVisit := []hash.Hash{root}

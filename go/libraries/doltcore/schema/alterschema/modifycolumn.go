@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
@@ -63,7 +65,7 @@ func ModifyColumn(
 	if !newCol.TypeInfo.Equals(existingCol.TypeInfo) ||
 		newCol.IsNullable() != existingCol.IsNullable() {
 		for _, index := range sch.Indexes().IndexesWithTag(existingCol.Tag) {
-			rebuiltIndexData, err := updatedTable.RebuildIndexRowData(ctx, index.Name())
+			rebuiltIndexData, err := editor.RebuildIndex(ctx, updatedTable, index.Name())
 			if err != nil {
 				return nil, err
 			}
@@ -145,7 +147,7 @@ func updateTableWithModifiedColumn(ctx context.Context, tbl *doltdb.Table, newSc
 		return nil, err
 	}
 
-	return doltdb.NewTable(ctx, vrw, newSchemaVal, rowData, &indexData)
+	return doltdb.NewTable(ctx, vrw, newSchemaVal, rowData, indexData)
 }
 
 // replaceColumnInSchema replaces the column with the name given with its new definition, optionally reordering it.
@@ -195,7 +197,10 @@ func replaceColumnInSchema(sch schema.Schema, oldCol schema.Column, newCol schem
 		return nil, err
 	}
 
-	newSch := schema.SchemaFromCols(collection)
+	newSch, err := schema.SchemaFromCols(collection)
+	if err != nil {
+		return nil, err
+	}
 	newSch.Indexes().AddIndex(sch.Indexes().AllIndexes()...)
 	return newSch, nil
 }

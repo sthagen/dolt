@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,19 +19,23 @@ import (
 	"errors"
 	"sync/atomic"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/row"
-	"github.com/dolthub/dolt/go/libraries/doltcore/schema/encoding"
-
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/env"
+	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table"
+	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/typed/noms"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
 	"github.com/dolthub/dolt/go/store/types"
 )
 
-// TableDataLocationUpdateRate is the number of writes that will process before the updated stats are displayed.
-const TableDataLocationUpdateRate = 32768
+const (
+	// tableWriterStatUpdateRate is the number of writes that will process before the updated stats are displayed.
+	tableWriterStatUpdateRate = 2 << 15
+
+	tableWriterGCRate = 2 << 16
+)
 
 // ErrNoPK is an error returned if a schema is missing a required primary key
 var ErrNoPK = errors.New("schema does not contain a primary key")
@@ -48,12 +52,12 @@ func (dl TableDataLocation) String() string {
 }
 
 // Exists returns true if the DataLocation already exists
-func (dl TableDataLocation) Exists(ctx context.Context, root *doltdb.RootValue, fs filesys.ReadableFS) (bool, error) {
+func (dl TableDataLocation) Exists(ctx context.Context, root *doltdb.RootValue, _ filesys.ReadableFS) (bool, error) {
 	return root.HasTable(ctx, dl.Name)
 }
 
 // NewReader creates a TableReadCloser for the DataLocation
-func (dl TableDataLocation) NewReader(ctx context.Context, root *doltdb.RootValue, fs filesys.ReadableFS, opts interface{}) (rdCl table.TableReadCloser, sorted bool, err error) {
+func (dl TableDataLocation) NewReader(ctx context.Context, root *doltdb.RootValue, _ filesys.ReadableFS, _ interface{}) (rdCl table.TableReadCloser, sorted bool, err error) {
 	tbl, ok, err := root.GetTable(ctx, dl.Name)
 
 	if err != nil {
@@ -87,46 +91,37 @@ func (dl TableDataLocation) NewReader(ctx context.Context, root *doltdb.RootValu
 
 // NewCreatingWriter will create a TableWriteCloser for a DataLocation that will create a new table, or overwrite
 // an existing table.
-func (dl TableDataLocation) NewCreatingWriter(ctx context.Context, mvOpts DataMoverOptions, root *doltdb.RootValue, fs filesys.WritableFS, sortedInput bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error) {
+func (dl TableDataLocation) NewCreatingWriter(ctx context.Context, _ DataMoverOptions, dEnv *env.DoltEnv, root *doltdb.RootValue, _ bool, outSch schema.Schema, statsCB noms.StatsCB, useGC bool) (table.TableWriteCloser, error) {
 	if outSch.GetPKCols().Size() == 0 {
 		return nil, ErrNoPK
 	}
 
-	m, err := types.NewMap(ctx, root.VRW())
-	if err != nil {
-		return nil, err
-	}
-	tblSchVal, err := encoding.MarshalSchemaAsNomsValue(ctx, root.VRW(), outSch)
+	updatedRoot, err := root.CreateEmptyTable(ctx, dl.Name, outSch)
 	if err != nil {
 		return nil, err
 	}
 
-	tbl, err := doltdb.NewTable(ctx, root.VRW(), tblSchVal, m, nil)
-	if err != nil {
-		return nil, err
-	}
-	updatedRoot, err := root.PutTable(ctx, dl.Name, tbl)
-	if err != nil {
-		return nil, err
-	}
-
-	tableEditor, err := doltdb.CreateTableEditSession(updatedRoot, doltdb.TableEditSessionProps{}).GetTableEditor(ctx, dl.Name, outSch)
+	sess := editor.CreateTableEditSession(updatedRoot, editor.TableEditSessionProps{})
+	tableEditor, err := sess.GetTableEditor(ctx, dl.Name, outSch)
 	if err != nil {
 		return nil, err
 	}
 
 	return &tableEditorWriteCloser{
+		dEnv:        dEnv,
 		insertOnly:  true,
-		initialData: m,
+		initialData: types.EmptyMap,
 		statsCB:     statsCB,
 		tableEditor: tableEditor,
+		sess:        sess,
 		tableSch:    outSch,
+		useGC:       useGC,
 	}, nil
 }
 
 // NewUpdatingWriter will create a TableWriteCloser for a DataLocation that will update and append rows based on
 // their primary key.
-func (dl TableDataLocation) NewUpdatingWriter(ctx context.Context, mvOpts DataMoverOptions, root *doltdb.RootValue, fs filesys.WritableFS, srcIsSorted bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error) {
+func (dl TableDataLocation) NewUpdatingWriter(ctx context.Context, _ DataMoverOptions, dEnv *env.DoltEnv, root *doltdb.RootValue, _ bool, _ schema.Schema, statsCB noms.StatsCB, useGC bool) (table.TableWriteCloser, error) {
 	tbl, ok, err := root.GetTable(ctx, dl.Name)
 	if err != nil {
 		return nil, err
@@ -144,23 +139,27 @@ func (dl TableDataLocation) NewUpdatingWriter(ctx context.Context, mvOpts DataMo
 		return nil, err
 	}
 
-	tableEditor, err := doltdb.CreateTableEditSession(root, doltdb.TableEditSessionProps{}).GetTableEditor(ctx, dl.Name, tblSch)
+	sess := editor.CreateTableEditSession(root, editor.TableEditSessionProps{})
+	tableEditor, err := sess.GetTableEditor(ctx, dl.Name, tblSch)
 	if err != nil {
 		return nil, err
 	}
 
 	return &tableEditorWriteCloser{
+		dEnv:        dEnv,
 		insertOnly:  false,
 		initialData: m,
 		statsCB:     statsCB,
 		tableEditor: tableEditor,
+		sess:        sess,
 		tableSch:    tblSch,
+		useGC:       useGC,
 	}, nil
 }
 
 // NewReplacingWriter will create a TableWriteCloser for a DataLocation that will overwrite an existing table while
 // preserving schema
-func (dl TableDataLocation) NewReplacingWriter(ctx context.Context, mvOpts DataMoverOptions, root *doltdb.RootValue, fs filesys.WritableFS, srcIsSorted bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error) {
+func (dl TableDataLocation) NewReplacingWriter(ctx context.Context, _ DataMoverOptions, dEnv *env.DoltEnv, root *doltdb.RootValue, _ bool, _ schema.Schema, statsCB noms.StatsCB, useGC bool) (table.TableWriteCloser, error) {
 	tbl, ok, err := root.GetTable(ctx, dl.Name)
 	if err != nil {
 		return nil, err
@@ -169,57 +168,54 @@ func (dl TableDataLocation) NewReplacingWriter(ctx context.Context, mvOpts DataM
 		return nil, errors.New("Could not find table " + dl.Name)
 	}
 
-	m, err := types.NewMap(ctx, root.VRW())
-	if err != nil {
-		return nil, err
-	}
 	tblSch, err := tbl.GetSchema(ctx)
 	if err != nil {
 		return nil, err
 	}
-	tblSchVal, err := encoding.MarshalSchemaAsNomsValue(ctx, root.VRW(), tblSch)
+
+	// overwrites existing table
+	updatedRoot, err := root.CreateEmptyTable(ctx, dl.Name, tblSch)
 	if err != nil {
 		return nil, err
 	}
 
-	tbl, err = doltdb.NewTable(ctx, root.VRW(), tblSchVal, m, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	updatedRoot, err := root.PutTable(ctx, dl.Name, tbl)
-	if err != nil {
-		return nil, err
-	}
-
-	tableEditor, err := doltdb.CreateTableEditSession(updatedRoot, doltdb.TableEditSessionProps{}).GetTableEditor(ctx, dl.Name, tblSch)
+	sess := editor.CreateTableEditSession(updatedRoot, editor.TableEditSessionProps{})
+	tableEditor, err := sess.GetTableEditor(ctx, dl.Name, tblSch)
 	if err != nil {
 		return nil, err
 	}
 
 	return &tableEditorWriteCloser{
+		dEnv:        dEnv,
 		insertOnly:  true,
-		initialData: m,
+		initialData: types.EmptyMap,
 		statsCB:     statsCB,
 		tableEditor: tableEditor,
+		sess:        sess,
 		tableSch:    tblSch,
+		useGC:       useGC,
 	}, nil
 }
 
 type tableEditorWriteCloser struct {
-	stats       types.AppliedEditStats
-	insertOnly  bool
+	dEnv        *env.DoltEnv
+	tableEditor editor.TableEditor
+	sess        *editor.TableEditSession
 	initialData types.Map
-	opsSoFar    int64
-	statsCB     noms.StatsCB
-	tableEditor *doltdb.SessionedTableEditor
 	tableSch    schema.Schema
+	insertOnly  bool
+	useGC       bool
+
+	statsCB noms.StatsCB
+	stats   types.AppliedEditStats
+	statOps int64
+	gcOps   int64
 }
 
 var _ DataMoverCloser = (*tableEditorWriteCloser)(nil)
 
 func (te *tableEditorWriteCloser) Flush(ctx context.Context) (*doltdb.RootValue, error) {
-	return te.tableEditor.Flush(ctx)
+	return te.sess.Flush(ctx)
 }
 
 // GetSchema implements TableWriteCloser
@@ -229,12 +225,21 @@ func (te *tableEditorWriteCloser) GetSchema() schema.Schema {
 
 // WriteRow implements TableWriteCloser
 func (te *tableEditorWriteCloser) WriteRow(ctx context.Context, r row.Row) error {
-	if te.statsCB != nil && atomic.LoadInt64(&te.opsSoFar) >= TableDataLocationUpdateRate {
-		atomic.StoreInt64(&te.opsSoFar, 0)
+	if te.statsCB != nil && atomic.LoadInt64(&te.statOps) >= tableWriterStatUpdateRate {
+		atomic.StoreInt64(&te.statOps, 0)
 		te.statsCB(te.stats)
 	}
+
+	if atomic.LoadInt64(&te.gcOps) >= tableWriterGCRate {
+		atomic.StoreInt64(&te.gcOps, 0)
+		if err := te.gc(ctx); err != nil {
+			return err
+		}
+	}
+	_ = atomic.AddInt64(&te.gcOps, 1)
+
 	if te.insertOnly {
-		_ = atomic.AddInt64(&te.opsSoFar, 1)
+		_ = atomic.AddInt64(&te.statOps, 1)
 		te.stats.Additions++
 		return te.tableEditor.InsertRow(ctx, r)
 	} else {
@@ -247,7 +252,7 @@ func (te *tableEditorWriteCloser) WriteRow(ctx context.Context, r row.Row) error
 			return err
 		}
 		if !ok {
-			_ = atomic.AddInt64(&te.opsSoFar, 1)
+			_ = atomic.AddInt64(&te.statOps, 1)
 			te.stats.Additions++
 			return te.tableEditor.InsertRow(ctx, r)
 		}
@@ -259,15 +264,36 @@ func (te *tableEditorWriteCloser) WriteRow(ctx context.Context, r row.Row) error
 			te.stats.SameVal++
 			return nil
 		}
-		_ = atomic.AddInt64(&te.opsSoFar, 1)
+		_ = atomic.AddInt64(&te.statOps, 1)
 		te.stats.Modifications++
 		return te.tableEditor.UpdateRow(ctx, oldRow, r)
 	}
 }
 
+func (te *tableEditorWriteCloser) gc(ctx context.Context) error {
+	if !te.useGC {
+		return nil
+	}
+
+	w := te.dEnv.RepoState.WorkingHash()
+	s := te.dEnv.RepoState.StagedHash()
+
+	inProgresRoot, err := te.sess.Flush(ctx)
+	if err != nil {
+		return err
+	}
+
+	i, err := te.dEnv.DoltDB.WriteRootValue(ctx, inProgresRoot)
+	if err != nil {
+		return err
+	}
+
+	return te.dEnv.DoltDB.GC(ctx, w, s, i)
+}
+
 // Close implements TableWriteCloser
 func (te *tableEditorWriteCloser) Close(ctx context.Context) error {
-	_, err := te.tableEditor.Flush(ctx)
+	err := te.gc(ctx)
 	if te.statsCB != nil {
 		te.statsCB(te.stats)
 	}

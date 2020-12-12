@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,7 +33,8 @@ func TestRenameTable(t *testing.T) {
 	cc, _ := schema.NewColCollection(
 		schema.NewColumn("id", uint64(100), types.UUIDKind, true, schema.NotNullConstraint{}),
 	)
-	otherSch := schema.SchemaFromCols(cc)
+	otherSch, err := schema.SchemaFromCols(cc)
+	require.NoError(t, err)
 
 	tests := []struct {
 		name           string
@@ -66,7 +67,7 @@ func TestRenameTable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dEnv := createEnvWithSeedData(t)
+			dEnv := dtestutils.CreateEnvWithSeedData(t)
 			ctx := context.Background()
 
 			dtestutils.CreateTestTable(t, dEnv, otherTable, otherSch)

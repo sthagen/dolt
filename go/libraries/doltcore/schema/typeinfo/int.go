@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -200,6 +200,11 @@ func (ti *intType) ParseValue(str *string) (types.Value, error) {
 		return types.NullValue, nil
 	}
 	return ti.ConvertValueToNomsValue(*str)
+}
+
+// Promote implements TypeInfo interface.
+func (ti *intType) Promote() TypeInfo {
+	return &intType{ti.sqlIntType.Promote().(sql.NumberType)}
 }
 
 // String implements TypeInfo interface.

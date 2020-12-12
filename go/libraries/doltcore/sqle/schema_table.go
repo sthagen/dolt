@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,13 +23,13 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
-	sqleSchema "github.com/dolthub/dolt/go/libraries/doltcore/sqle/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/sqlutil"
 	"github.com/dolthub/dolt/go/store/types"
 )
 
 // The fixed SQL schema for the `dolt_schemas` table.
 func SchemasTableSqlSchema() sql.Schema {
-	sqlSchema, err := sqleSchema.FromDoltSchema(doltdb.SchemasTableName, SchemasTableSchema())
+	sqlSchema, err := sqlutil.FromDoltSchema(doltdb.SchemasTableName, SchemasTableSchema())
 	if err != nil {
 		panic(err) // should never happen
 	}
@@ -47,7 +47,7 @@ func SchemasTableSchema() schema.Schema {
 	if err != nil {
 		panic(err) // should never happen
 	}
-	return schema.SchemaFromCols(colColl)
+	return schema.MustSchemaFromCols(colColl)
 }
 
 // GetOrCreateDoltSchemasTable returns the `dolt_schemas` table in `db`, creating it if it does not already exist.
@@ -161,7 +161,7 @@ func migrateOldSchemasTableToNew(
 		if err != nil {
 			return err
 		}
-		sqlRow, err := doltRowToSqlRow(dRow, schemasTable.sch)
+		sqlRow, err := row.DoltRowToSqlRow(dRow, schemasTable.sch)
 		if err != nil {
 			return err
 		}

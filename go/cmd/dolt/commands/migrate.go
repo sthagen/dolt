@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -64,7 +64,7 @@ func (cmd MigrateCmd) createArgParser() *argparser.ArgParser {
 
 // EventType returns the type of the event to log
 func (cmd MigrateCmd) EventType() eventsapi.ClientEventType {
-	return eventsapi.ClientEventType_TYPE_UNSPECIFIED
+	return eventsapi.ClientEventType_MIGRATE
 }
 
 // Exec executes the command

@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -79,7 +79,7 @@ func (cmd TagCmd) createArgParser() *argparser.ArgParser {
 
 // EventType returns the type of the event to log
 func (cmd TagCmd) EventType() eventsapi.ClientEventType {
-	return eventsapi.ClientEventType_BRANCH
+	return eventsapi.ClientEventType_TAG
 }
 
 // Exec executes the command

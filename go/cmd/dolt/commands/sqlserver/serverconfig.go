@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,8 +24,6 @@ import (
 // LogLevel defines the available levels of logging for the server.
 type LogLevel string
 
-var CliVersion = "test"
-
 const (
 	LogLevel_Trace   LogLevel = "trace"
 	LogLevel_Debug   LogLevel = "debug"
@@ -40,7 +38,7 @@ const (
 	defaultPort             = 3306
 	defaultUser             = "root"
 	defaultPass             = ""
-	defaultTimeout          = 30 * 1000
+	defaultTimeout          = 8 * 60 * 60 * 1000 // 8 hours, same as MySQL
 	defaultReadOnly         = false
 	defaultLogLevel         = LogLevel_Info
 	defaultAutoCommit       = true

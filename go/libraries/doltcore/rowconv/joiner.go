@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -73,7 +73,7 @@ func NewJoiner(namedSchemas []NamedSchema, namers map[string]ColNamingFunc) (*Jo
 		allCols.IterInSortedOrder(func(srcTag uint64, col schema.Column) (stop bool) {
 			newColName := namer(col.Name)
 			var newCol schema.Column
-			newCol, err = schema.NewColumnWithTypeInfo(newColName, destTag, col.TypeInfo, false, col.Default, col.Comment)
+			newCol, err = schema.NewColumnWithTypeInfo(newColName, destTag, col.TypeInfo, false, col.Default, false, col.Comment)
 			if err != nil {
 				return true
 			}

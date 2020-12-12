@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -303,22 +303,21 @@ func importSchema(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPars
 			return errhand.BuildDError("error: failed to encode schema.").AddCause(err).Build()
 		}
 
-		m, err := types.NewMap(ctx, root.VRW())
+		empty, err := types.NewMap(ctx, root.VRW())
 
 		if err != nil {
 			return errhand.BuildDError("error: failed to create table.").AddCause(err).Build()
 		}
 
-		var indexData *types.Map
+		indexData := empty
 		if tblExists {
-			existingIndexData, err := tbl.GetIndexData(ctx)
+			indexData, err = tbl.GetIndexData(ctx)
 			if err != nil {
 				return errhand.BuildDError("error: failed to create table.").AddCause(err).Build()
 			}
-			indexData = &existingIndexData
 		}
 
-		tbl, err = doltdb.NewTable(ctx, root.VRW(), schVal, m, indexData)
+		tbl, err = doltdb.NewTable(ctx, root.VRW(), schVal, empty, indexData)
 
 		if err != nil {
 			return errhand.BuildDError("error: failed to create table.").AddCause(err).Build()
@@ -418,8 +417,11 @@ func CombineColCollections(ctx context.Context, root *doltdb.RootValue, inferred
 	if err != nil {
 		return nil, errhand.BuildDError("failed to generate new schema").AddCause(err).Build()
 	}
-
-	return schema.SchemaFromCols(combined), nil
+	sch, err := schema.SchemaFromCols(combined)
+	if err != nil {
+		return nil, errhand.BuildDError("failed to get schema from cols").AddCause(err).Build()
+	}
+	return sch, nil
 }
 
 func columnsForSchemaCreate(inferredCols *schema.ColCollection, pkNames []string) (newCols *schema.ColCollection) {

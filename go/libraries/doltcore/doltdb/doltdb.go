@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -45,8 +45,12 @@ const (
 	MasterBranch     = "master"
 	CommitStructName = "Commit"
 
+	FeatureVersion featureVersion = 0
+
 	defaultChunksPerTF = 256 * 1024
 )
+
+type featureVersion int64
 
 // LocalDirDoltDB stores the db in the current directory
 var LocalDirDoltDB = "file://./" + dbfactory.DoltDataDir
@@ -412,14 +416,30 @@ func (ddb *DoltDB) ReadRootValue(ctx context.Context, h hash.Hash) (*RootValue, 
 	if err != nil {
 		return nil, err
 	}
+	if val == nil {
+		return nil, errors.New("there is no dolt root value at that hash")
+	}
 
-	if val != nil {
-		if rootSt, ok := val.(types.Struct); ok && rootSt.Name() == ddbRootStructName {
-			return &RootValue{ddb.db, rootSt, nil}, nil
+	rootSt, ok := val.(types.Struct)
+	if !ok || rootSt.Name() != ddbRootStructName {
+		return nil, errors.New("there is no dolt root value at that hash")
+	}
+
+	v, ok, err := rootSt.MaybeGet(featureVersKey)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		ver := featureVersion(v.(types.Int))
+		if FeatureVersion < ver {
+			return nil, ErrClientOutOfDate{
+				clientVer: FeatureVersion,
+				repoVer:   ver,
+			}
 		}
 	}
 
-	return nil, errors.New("there is no dolt root value at that hash")
+	return &RootValue{ddb.db, rootSt, nil}, nil
 }
 
 // Commit will update a branch's head value to be that of a previously committed root value hash
@@ -705,7 +725,7 @@ func (ddb *DoltDB) Format() *types.NomsBinFormat {
 	return ddb.db.Format()
 }
 
-func writeValAndGetRef(ctx context.Context, vrw types.ValueReadWriter, val types.Value) (types.Ref, error) {
+func WriteValAndGetRef(ctx context.Context, vrw types.ValueReadWriter, val types.Value) (types.Ref, error) {
 	valRef, err := types.NewRef(val, vrw.Format())
 
 	if err != nil {
@@ -937,7 +957,7 @@ func (ddb *DoltDB) GC(ctx context.Context, uncommitedVals ...hash.Hash) error {
 			return err
 		}
 
-		r, err := writeValAndGetRef(ctx, ddb.db, v)
+		r, err := WriteValAndGetRef(ctx, ddb.db, v)
 		if err != nil {
 			return err
 		}

@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ type IntervalEndpoint struct {
 // or a chained comparison {n | 0.0 <= n <= 1.0 } (set of all floating point values between 0.0 and 1.0)
 type Interval struct {
 	nbf *types.NomsBinFormat
-	// Start is the start of an interval. Start must be less than or equal to Erd. A nil value indicates an interval
+	// Start is the start of an interval. Start must be less than or equal to End. A nil value indicates an interval
 	// going to negative infinity
 	Start *IntervalEndpoint
 	// End is the end of an interval. End must be greater than or equal to Start. A nil value indicates an interval

@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,7 +26,6 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema/typeinfo"
-	"github.com/dolthub/dolt/go/libraries/doltcore/table/pipeline"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/untyped"
 	"github.com/dolthub/dolt/go/store/types"
 )
@@ -41,7 +40,7 @@ var srcCols, _ = schema.NewColCollection(
 	schema.NewColumn("timestamptostr", 6, types.TimestampKind, false),
 )
 
-var srcSch = schema.SchemaFromCols(srcCols)
+var srcSch = schema.MustSchemaFromCols(srcCols)
 
 func TestRowConverter(t *testing.T) {
 	mapping, err := TypedToUntypedMapping(srcSch)
@@ -67,8 +66,8 @@ func TestRowConverter(t *testing.T) {
 	})
 
 	assert.NoError(t, err)
-	results, _ := GetRowConvTransformFunc(rConv)(inRow, pipeline.ImmutableProperties{})
-	outData := results[0].RowData
+	outData, err := rConv.Convert(inRow)
+	assert.NoError(t, err)
 
 	destSch := mapping.DestSch
 	expected, err := row.New(types.Format_7_18, destSch, row.TaggedValues{
@@ -103,12 +102,13 @@ func TestUnneccessaryConversion(t *testing.T) {
 }
 
 func TestSpecialBoolHandling(t *testing.T) {
-	col1, err := schema.NewColumnWithTypeInfo("pk", 0, typeinfo.Int64Type, true, "", "")
+	col1, err := schema.NewColumnWithTypeInfo("pk", 0, typeinfo.Int64Type, true, "", false, "")
 	require.NoError(t, err)
-	col2, err := schema.NewColumnWithTypeInfo("v", 1, typeinfo.PseudoBoolType, false, "", "")
+	col2, err := schema.NewColumnWithTypeInfo("v", 1, typeinfo.PseudoBoolType, false, "", false, "")
 	require.NoError(t, err)
 	colColl, _ := schema.NewColCollection(col1, col2)
-	sch := schema.SchemaFromCols(colColl)
+	sch, err := schema.SchemaFromCols(colColl)
+	require.NoError(t, err)
 	untypedSch, err := untyped.UntypeSchema(sch)
 	require.NoError(t, err)
 
@@ -121,10 +121,9 @@ func TestSpecialBoolHandling(t *testing.T) {
 		1: types.String("true"),
 	})
 	require.NoError(t, err)
-	results, errStr := GetRowConvTransformFunc(rconv)(inRow, pipeline.ImmutableProperties{})
-	require.NotNil(t, results)
-	require.Empty(t, errStr)
-	outData := results[0].RowData
+	outData, err := rconv.Convert(inRow)
+	require.NoError(t, err)
+	require.NotNil(t, outData)
 
 	expected, err := row.New(types.Format_7_18, mapping.DestSch, row.TaggedValues{
 		0: types.Int(76),
@@ -135,7 +134,7 @@ func TestSpecialBoolHandling(t *testing.T) {
 
 	rconvNoHandle, err := NewRowConverter(mapping)
 	require.NoError(t, err)
-	results, errStr = GetRowConvTransformFunc(rconvNoHandle)(inRow, pipeline.ImmutableProperties{})
+	results, errStr := rconvNoHandle.Convert(inRow)
 	assert.Nil(t, results)
 	assert.NotEmpty(t, errStr)
 }

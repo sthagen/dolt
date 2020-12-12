@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -47,14 +47,14 @@ var ageVal = types.Uint(53)
 var titleVal = types.NullValue
 
 var pkCols = []Column{
-	{lnColName, lnColTag, types.StringKind, true, typeinfo.StringDefaultType, "", "", nil},
-	{fnColName, fnColTag, types.StringKind, true, typeinfo.StringDefaultType, "", "", nil},
+	{lnColName, lnColTag, types.StringKind, true, typeinfo.StringDefaultType, "", false, "", nil},
+	{fnColName, fnColTag, types.StringKind, true, typeinfo.StringDefaultType, "", false, "", nil},
 }
 var nonPkCols = []Column{
-	{addrColName, addrColTag, types.StringKind, false, typeinfo.StringDefaultType, "", "", nil},
-	{ageColName, ageColTag, types.UintKind, false, typeinfo.FromKind(types.UintKind), "", "", nil},
-	{titleColName, titleColTag, types.StringKind, false, typeinfo.StringDefaultType, "", "", nil},
-	{reservedColName, reservedColTag, types.StringKind, false, typeinfo.StringDefaultType, "", "", nil},
+	{addrColName, addrColTag, types.StringKind, false, typeinfo.StringDefaultType, "", false, "", nil},
+	{ageColName, ageColTag, types.UintKind, false, typeinfo.FromKind(types.UintKind), "", false, "", nil},
+	{titleColName, titleColTag, types.StringKind, false, typeinfo.StringDefaultType, "", false, "", nil},
+	{reservedColName, reservedColTag, types.StringKind, false, typeinfo.StringDefaultType, "", false, "", nil},
 }
 
 var allCols = append(append([]Column(nil), pkCols...), nonPkCols...)
@@ -62,7 +62,8 @@ var allCols = append(append([]Column(nil), pkCols...), nonPkCols...)
 func TestSchema(t *testing.T) {
 	colColl, err := NewColCollection(allCols...)
 	require.NoError(t, err)
-	schFromCols := SchemaFromCols(colColl)
+	schFromCols, err := SchemaFromCols(colColl)
+	require.NoError(t, err)
 
 	testSchema("SchemaFromCols", schFromCols, t)
 
@@ -81,13 +82,34 @@ func TestSchemaWithNoPKs(t *testing.T) {
 	colColl, err := NewColCollection(nonPkCols...)
 	require.NoError(t, err)
 
-	assert.Panics(t, func() {
-		SchemaFromCols(colColl)
-	})
+	_, err = SchemaFromCols(colColl)
+	assert.Equal(t, ErrNoPrimaryKeyColumns, err)
 
 	assert.NotPanics(t, func() {
 		UnkeyedSchemaFromCols(colColl)
 	})
+}
+
+func TestIsKeyless(t *testing.T) {
+	cc, err := NewColCollection(allCols...)
+	require.NoError(t, err)
+	pkSch, err := SchemaFromCols(cc)
+	require.NoError(t, err)
+
+	ok := IsKeyless(pkSch)
+	assert.False(t, ok)
+
+	FeatureFlagKeylessSchema = true
+	defer func() { FeatureFlagKeylessSchema = false }()
+
+	cc, err = NewColCollection(nonPkCols...)
+	require.NoError(t, err)
+
+	keylessSch, err := SchemaFromCols(cc)
+	assert.NoError(t, err)
+
+	ok = IsKeyless(keylessSch)
+	assert.True(t, ok)
 }
 
 func TestValidateForInsert(t *testing.T) {
@@ -98,7 +120,7 @@ func TestValidateForInsert(t *testing.T) {
 	})
 
 	t.Run("Name collision", func(t *testing.T) {
-		cols := append(allCols, Column{titleColName, 100, types.StringKind, false, typeinfo.StringDefaultType, "", "", nil})
+		cols := append(allCols, Column{titleColName, 100, types.StringKind, false, typeinfo.StringDefaultType, "", false, "", nil})
 		colColl, err := NewColCollection(cols...)
 		require.NoError(t, err)
 
@@ -156,33 +178,3 @@ func validateCols(t *testing.T, cols []Column, colColl *ColCollection, msg strin
 		t.Error()
 	}
 }
-
-/*
-func TestAutoGenerateTag(t *testing.T) {
-	colColl, _ := NewColCollection()
-	sch := SchemaFromCols(colColl)
-
-	var max uint64 = 128
-	for i := uint64(0); i < 128*128; i++ {
-		if i > 8192 {
-			max = 2097152
-		} else if i > 64 {
-			max = 16384
-		}
-
-		tag := AutoGenerateTag(sch)
-
-		if tag >= max {
-			t.Fatal("auto generated tag out of range")
-		} else {
-			var err error
-			colColl, err = colColl.Append(NewColumn(strconv.FormatUint(i, 10), tag, types.StringKind, false))
-
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			sch = SchemaFromCols(colColl)
-		}
-	}
-}*/

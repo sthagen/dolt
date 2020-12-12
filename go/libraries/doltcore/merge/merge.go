@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,15 +19,17 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/dolthub/dolt/go/store/atomicerr"
-	"github.com/dolthub/dolt/go/store/hash"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/diff"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/libraries/utils/valutil"
+	"github.com/dolthub/dolt/go/store/atomicerr"
+	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/types"
 )
 
@@ -47,7 +49,7 @@ func NewMerger(ctx context.Context, root, mergeRoot, ancRoot *doltdb.RootValue, 
 }
 
 // MergeTable merges schema and table data for the table tblName.
-func (merger *Merger) MergeTable(ctx context.Context, tblName string, tableEditSession *doltdb.TableEditSession) (*doltdb.Table, *MergeStats, error) {
+func (merger *Merger) MergeTable(ctx context.Context, tblName string, sess *editor.TableEditSession) (*doltdb.Table, *MergeStats, error) {
 	tbl, ok, err := merger.root.GetTable(ctx, tblName)
 
 	if err != nil {
@@ -113,7 +115,7 @@ func (merger *Merger) MergeTable(ctx context.Context, tblName string, tableEditS
 			ms, err = calcTableMergeStats(ctx, tbl, mergeTbl)
 		}
 		// force load the table editor since this counts as a change
-		_, err := tableEditSession.GetTableEditor(ctx, tblName, nil)
+		_, err := sess.GetTableEditor(ctx, tblName, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -174,17 +176,17 @@ func (merger *Merger) MergeTable(ctx context.Context, tblName string, tableEditS
 		return nil, nil, err
 	}
 
-	err = tableEditSession.UpdateRoot(ctx, func(ctx context.Context, root *doltdb.RootValue) (*doltdb.RootValue, error) {
+	err = sess.UpdateRoot(ctx, func(ctx context.Context, root *doltdb.RootValue) (*doltdb.RootValue, error) {
 		return root.PutTable(ctx, tblName, updatedTbl)
 	})
 
-	updatedTblEditor, err := tableEditSession.GetTableEditor(ctx, tblName, nil)
+	updatedTblEditor, err := sess.GetTableEditor(ctx, tblName, nil)
 
 	if err != nil {
 		return nil, nil, err
 	}
 
-	mergedTable, conflicts, stats, err := mergeTableData(ctx, tblName, postMergeSchema, rows, mergeRows, ancRows, merger.vrw, updatedTblEditor)
+	resultTbl, conflicts, stats, err := mergeTableData(ctx, merger.vrw, tblName, postMergeSchema, rows, mergeRows, ancRows, updatedTblEditor, sess)
 
 	if err != nil {
 		return nil, nil, err
@@ -193,28 +195,33 @@ func (merger *Merger) MergeTable(ctx context.Context, tblName string, tableEditS
 	if conflicts.Len() > 0 {
 
 		asr, err := ancTbl.GetSchemaRef()
-
 		if err != nil {
 			return nil, nil, err
 		}
 
 		sr, err := tbl.GetSchemaRef()
-
 		if err != nil {
 			return nil, nil, err
 		}
 
 		msr, err := mergeTbl.GetSchemaRef()
-
 		if err != nil {
 			return nil, nil, err
 		}
 
 		schemas := doltdb.NewConflict(asr, sr, msr)
-		mergedTable, err = mergedTable.SetConflicts(ctx, schemas, conflicts)
+		resultTbl, err = resultTbl.SetConflicts(ctx, schemas, conflicts)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
-	return mergedTable, stats, nil
+	resultTbl, err = mergeAutoIncrementValues(ctx, tbl, mergeTbl, resultTbl)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return resultTbl, stats, nil
 }
 
 func calcTableMergeStats(ctx context.Context, tbl *doltdb.Table, mergeTbl *doltdb.Table) (MergeStats, error) {
@@ -257,55 +264,48 @@ func calcTableMergeStats(ctx context.Context, tbl *doltdb.Table, mergeTbl *doltd
 	return ms, nil
 }
 
-func stopAndDrain(stop chan<- struct{}, drain <-chan types.ValueChanged) {
-	close(stop)
-	for range drain {
-	}
-}
-
-func mergeTableData(ctx context.Context, tblName string, sch schema.Schema, rows, mergeRows, ancRows types.Map, vrw types.ValueReadWriter, tblEdit *doltdb.SessionedTableEditor) (*doltdb.Table, types.Map, *MergeStats, error) {
-	//changeChan1, changeChan2 := make(chan diff.Difference, 32), make(chan diff.Difference, 32)
-	ae := atomicerr.New()
+func mergeTableData(ctx context.Context, vrw types.ValueReadWriter, tblName string, sch schema.Schema, rows, mergeRows, ancRows types.Map, tblEdit editor.TableEditor, sess *editor.TableEditSession) (*doltdb.Table, types.Map, *MergeStats, error) {
 	changeChan, mergeChangeChan := make(chan types.ValueChanged, 32), make(chan types.ValueChanged, 32)
-	stopChan, mergeStopChan := make(chan struct{}, 1), make(chan struct{}, 1)
 
-	go func() {
-		//diff.Diff(rows1, ancRows, changeChan1, stopChan1, true, dontDescend)
-		rows.Diff(ctx, ancRows, ae, changeChan, stopChan)
-		close(changeChan)
-	}()
+	eg, ctx := errgroup.WithContext(ctx)
 
-	go func() {
-		//diff.Diff(rows2, ancRows, changeChan2, stopChan2, true, dontDescend)
-		mergeRows.Diff(ctx, ancRows, ae, mergeChangeChan, mergeStopChan)
-		close(mergeChangeChan)
-	}()
-
-	defer stopAndDrain(stopChan, changeChan)
-	defer stopAndDrain(mergeStopChan, mergeChangeChan)
+	eg.Go(func() error {
+		defer close(changeChan)
+		return rows.Diff(ctx, ancRows, changeChan)
+	})
+	eg.Go(func() error {
+		defer close(mergeChangeChan)
+		return mergeRows.Diff(ctx, ancRows, mergeChangeChan)
+	})
 
 	conflictValChan := make(chan types.Value)
-	conflictMapChan := types.NewStreamingMap(ctx, vrw, ae, conflictValChan)
+	sm := types.NewStreamingMap(ctx, vrw, conflictValChan)
 	stats := &MergeStats{Operation: TableModified}
 
-	f := func() error {
+	eg.Go(func() error {
 		defer close(conflictValChan)
 
 		var change, mergeChange types.ValueChanged
 		for {
-			if ae.IsSet() {
-				break
-			}
-
 			// Get the next change from both a and b. If either diff(a, parent) or diff(b, parent) is
 			// complete, aChange or bChange will get an empty types.ValueChanged containing a nil Value.
 			// Generally, though, this allows us to proceed through both diffs in (key) order, considering
 			// the "current" change from both diffs at the same time.
 			if change.Key == nil {
-				change = <-changeChan
+				select {
+				case change = <-changeChan:
+					break
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 			if mergeChange.Key == nil {
-				mergeChange = <-mergeChangeChan
+				select {
+				case mergeChange = <-mergeChangeChan:
+					break
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 
 			key, mergeKey := change.Key, mergeChange.Key
@@ -321,7 +321,6 @@ func mergeTableData(ctx context.Context, tblName string, sch schema.Schema, rows
 				mkNilOrKeyLess := mergeKey == nil
 				if !mkNilOrKeyLess {
 					mkNilOrKeyLess, err = key.Less(vrw.Format(), mergeKey)
-
 					if err != nil {
 						return err
 					}
@@ -338,7 +337,6 @@ func mergeTableData(ctx context.Context, tblName string, sch schema.Schema, rows
 				keyNilOrMKLess := key == nil
 				if !keyNilOrMKLess {
 					keyNilOrMKLess, err = mergeKey.Less(vrw.Format(), key)
-
 					if err != nil {
 						return err
 					}
@@ -357,7 +355,6 @@ func mergeTableData(ctx context.Context, tblName string, sch schema.Schema, rows
 			if !processed {
 				r, mergeRow, ancRow := change.NewValue, mergeChange.NewValue, change.OldValue
 				mergedRow, isConflict, err := rowMerge(ctx, vrw.Format(), sch, r, mergeRow, ancRow)
-
 				if err != nil {
 					return err
 				}
@@ -365,12 +362,14 @@ func mergeTableData(ctx context.Context, tblName string, sch schema.Schema, rows
 				if isConflict {
 					stats.Conflicts++
 					conflictTuple, err := doltdb.NewConflict(ancRow, r, mergeRow).ToNomsList(vrw)
-
 					if err != nil {
 						return err
 					}
 
-					addConflict(conflictValChan, key, conflictTuple)
+					err = addConflict(conflictValChan, sm.Done(), key, conflictTuple)
+					if err != nil {
+						return err
+					}
 				} else {
 					err = applyChange(ctx, tblEdit, rows, sch, stats, types.ValueChanged{ChangeType: change.ChangeType, Key: key, OldValue: r, NewValue: mergedRow})
 					if err != nil {
@@ -384,20 +383,17 @@ func mergeTableData(ctx context.Context, tblName string, sch schema.Schema, rows
 		}
 
 		return nil
+	})
+
+	if err := eg.Wait(); err != nil {
+		return nil, types.EmptyMap, nil, err
 	}
 
-	err := f()
-
+	conflicts, err := sm.Wait()
 	if err != nil {
 		return nil, types.EmptyMap, nil, err
 	}
-
-	if err := ae.Get(); err != nil {
-		return nil, types.EmptyMap, nil, err
-	}
-
-	conflicts := <-conflictMapChan
-	newRoot, err := tblEdit.Flush(ctx)
+	newRoot, err := sess.Flush(ctx)
 	if err != nil {
 		return nil, types.EmptyMap, nil, err
 	}
@@ -413,12 +409,21 @@ func mergeTableData(ctx context.Context, tblName string, sch schema.Schema, rows
 	return mergedTable, conflicts, stats, nil
 }
 
-func addConflict(conflictChan chan types.Value, key types.Value, value types.Tuple) {
-	conflictChan <- key
-	conflictChan <- value
+func addConflict(conflictChan chan types.Value, done <-chan struct{}, key types.Value, value types.Tuple) error {
+	select {
+	case conflictChan <- key:
+	case <-done:
+		return context.Canceled
+	}
+	select {
+	case conflictChan <- value:
+	case <-done:
+		return context.Canceled
+	}
+	return nil
 }
 
-func applyChange(ctx context.Context, tableEditor *doltdb.SessionedTableEditor, rowData types.Map, sch schema.Schema, stats *MergeStats, change types.ValueChanged) error {
+func applyChange(ctx context.Context, tableEditor editor.TableEditor, rowData types.Map, sch schema.Schema, stats *MergeStats, change types.ValueChanged) error {
 	switch change.ChangeType {
 	case types.DiffChangeAdded:
 		newRow, err := row.FromNoms(sch, change.Key.(types.Tuple), change.NewValue.(types.Tuple))
@@ -554,6 +559,41 @@ func rowMerge(ctx context.Context, nbf *types.NomsBinFormat, sch schema.Schema, 
 	return v, false, nil
 }
 
+func mergeAutoIncrementValues(ctx context.Context, tbl, otherTbl, resultTbl *doltdb.Table) (*doltdb.Table, error) {
+	// only need to check one table, no PK changes yet
+	sch, err := tbl.GetSchema(ctx)
+	if err != nil {
+		return nil, err
+	}
+	auto := false
+	_ = sch.GetAllCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
+		if col.AutoIncrement {
+			auto, stop = true, true
+		}
+		return
+	})
+	if !auto {
+		return resultTbl, nil
+	}
+
+	autoVal, err := tbl.GetAutoIncrementValue(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mergeAutoVal, err := otherTbl.GetAutoIncrementValue(ctx)
+	if err != nil {
+		return nil, err
+	}
+	less, err := autoVal.Less(tbl.Format(), mergeAutoVal)
+	if err != nil {
+		return nil, err
+	}
+	if less {
+		autoVal = mergeAutoVal
+	}
+	return resultTbl.SetAutoIncrementValue(autoVal)
+}
+
 func MergeCommits(ctx context.Context, commit, mergeCommit *doltdb.Commit) (*doltdb.RootValue, map[string]*MergeStats, error) {
 	ancCommit, err := doltdb.GetCommitAncestor(ctx, commit, mergeCommit)
 
@@ -594,7 +634,7 @@ func MergeRoots(ctx context.Context, ourRoot, theirRoot, ancRoot *doltdb.RootVal
 	tblToStats := make(map[string]*MergeStats)
 
 	newRoot := ourRoot
-	tableEditSession := doltdb.CreateTableEditSession(ourRoot, doltdb.TableEditSessionProps{
+	tableEditSession := editor.CreateTableEditSession(ourRoot, editor.TableEditSessionProps{
 		ForeignKeyChecksDisabled: true,
 	})
 	var unconflicted []string
@@ -717,5 +757,5 @@ func GetDocsInConflict(ctx context.Context, dEnv *env.DoltEnv) (*diff.DocDiffs, 
 		return nil, err
 	}
 
-	return diff.NewDocDiffs(ctx, dEnv, workingRoot, nil, docDetails)
+	return diff.NewDocDiffs(ctx, workingRoot, nil, docDetails)
 }

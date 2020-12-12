@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -46,6 +46,8 @@ type encodedColumn struct {
 
 	Default string `noms:"default,omitempty" json:"default,omitempty"`
 
+	AutoIncrement bool `noms:"auto_increment,omitempty" json:"auto_increment,omitempty"`
+
 	Comment string `noms:"comment,omitempty" json:"comment,omitempty"`
 
 	Constraints []encodedConstraint `noms:"col_constraints" json:"col_constraints"`
@@ -80,14 +82,15 @@ func decodeAllColConstraint(encConstraints []encodedConstraint) []schema.ColCons
 
 func encodeColumn(col schema.Column) encodedColumn {
 	return encodedColumn{
-		col.Tag,
-		col.Name,
-		col.KindString(),
-		col.IsPartOfPK,
-		encodeTypeInfo(col.TypeInfo),
-		col.Default,
-		col.Comment,
-		encodeAllColConstraints(col.Constraints),
+		Tag:           col.Tag,
+		Name:          col.Name,
+		Kind:          col.KindString(),
+		IsPartOfPK:    col.IsPartOfPK,
+		TypeInfo:      encodeTypeInfo(col.TypeInfo),
+		Default:       col.Default,
+		AutoIncrement: col.AutoIncrement,
+		Comment:       col.Comment,
+		Constraints:   encodeAllColConstraints(col.Constraints),
 	}
 }
 
@@ -105,7 +108,7 @@ func (nfd encodedColumn) decodeColumn() (schema.Column, error) {
 		return schema.Column{}, errors.New("cannot decode column due to unknown schema format")
 	}
 	colConstraints := decodeAllColConstraint(nfd.Constraints)
-	return schema.NewColumnWithTypeInfo(nfd.Name, nfd.Tag, typeInfo, nfd.IsPartOfPK, nfd.Default, nfd.Comment, colConstraints...)
+	return schema.NewColumnWithTypeInfo(nfd.Name, nfd.Tag, typeInfo, nfd.IsPartOfPK, nfd.Default, nfd.AutoIncrement, nfd.Comment, colConstraints...)
 }
 
 type encodedConstraint struct {
@@ -196,7 +199,10 @@ func (sd schemaData) decodeSchema() (schema.Schema, error) {
 		return nil, err
 	}
 
-	sch := schema.SchemaFromCols(colColl)
+	sch, err := schema.SchemaFromCols(colColl)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, encodedIndex := range sd.IndexCollection {
 		_, err = sch.Indexes().UnsafeAddIndexByColTags(

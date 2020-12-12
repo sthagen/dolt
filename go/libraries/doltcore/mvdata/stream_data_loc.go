@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,8 @@ import (
 	"errors"
 	"io"
 	"io/ioutil"
+
+	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
@@ -74,7 +76,7 @@ func (dl StreamDataLocation) NewReader(ctx context.Context, root *doltdb.RootVal
 
 // NewCreatingWriter will create a TableWriteCloser for a DataLocation that will create a new table, or overwrite
 // an existing table.
-func (dl StreamDataLocation) NewCreatingWriter(ctx context.Context, mvOpts DataMoverOptions, root *doltdb.RootValue, fs filesys.WritableFS, sortedInput bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error) {
+func (dl StreamDataLocation) NewCreatingWriter(_ context.Context, _ DataMoverOptions, _ *env.DoltEnv, _ *doltdb.RootValue, _ bool, outSch schema.Schema, _ noms.StatsCB, _ bool) (table.TableWriteCloser, error) {
 	switch dl.Format {
 	case CsvFile:
 		return csv.NewCSVWriter(iohelp.NopWrCloser(dl.Writer), outSch, csv.NewCSVInfo())
@@ -88,12 +90,12 @@ func (dl StreamDataLocation) NewCreatingWriter(ctx context.Context, mvOpts DataM
 
 // NewUpdatingWriter will create a TableWriteCloser for a DataLocation that will update and append rows based on
 // their primary key.
-func (dl StreamDataLocation) NewUpdatingWriter(ctx context.Context, mvOpts DataMoverOptions, root *doltdb.RootValue, fs filesys.WritableFS, srcIsSorted bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error) {
+func (dl StreamDataLocation) NewUpdatingWriter(_ context.Context, _ DataMoverOptions, _ *env.DoltEnv, _ *doltdb.RootValue, _ bool, _ schema.Schema, _ noms.StatsCB, _ bool) (table.TableWriteCloser, error) {
 	panic("Updating is not supported for stdout")
 }
 
 // NewReplacingWriter will create a TableWriteCloser for a DataLocation that will overwrite an existing table while
 // preserving schema
-func (dl StreamDataLocation) NewReplacingWriter(ctx context.Context, mvOpts DataMoverOptions, root *doltdb.RootValue, fs filesys.WritableFS, srcIsSorted bool, outSch schema.Schema, statsCB noms.StatsCB) (table.TableWriteCloser, error) {
+func (dl StreamDataLocation) NewReplacingWriter(_ context.Context, _ DataMoverOptions, _ *env.DoltEnv, _ *doltdb.RootValue, _ bool, _ schema.Schema, _ noms.StatsCB, _ bool) (table.TableWriteCloser, error) {
 	panic("Replacing is not supported for stdout")
 }

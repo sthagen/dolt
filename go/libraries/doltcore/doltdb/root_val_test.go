@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,89 +24,6 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/store/types"
 )
-
-func TestTableDiff(t *testing.T) {
-	ctx := context.Background()
-	ddb, _ := LoadDoltDB(ctx, types.Format_7_18, InMemDoltDB)
-	ddb.WriteEmptyRepo(ctx, "billy bob", "bigbillieb@fake.horse")
-
-	cs, _ := NewCommitSpec("master")
-	cm, _ := ddb.Resolve(ctx, cs, nil)
-
-	root, err := cm.GetRootValue()
-	assert.NoError(t, err)
-	added, modified, removed, err := root.TableDiff(ctx, root)
-	assert.NoError(t, err)
-
-	if len(added)+len(modified)+len(removed) != 0 {
-		t.Error("Bad table diff when comparing two repos")
-	}
-
-	sch := createTestSchema(t)
-	m, err := types.NewMap(ctx, ddb.ValueReadWriter())
-	assert.NoError(t, err)
-
-	tbl1, err := createTestTable(ddb.ValueReadWriter(), sch, m)
-	assert.NoError(t, err)
-
-	root2, err := root.PutTable(ctx, "tbl1", tbl1)
-	assert.NoError(t, err)
-
-	added, modified, removed, err = root2.TableDiff(ctx, root)
-	assert.NoError(t, err)
-
-	if len(added) != 1 || added[0] != "tbl1" || len(modified)+len(removed) != 0 {
-		t.Error("Bad table diff after adding a single table")
-	}
-
-	added, modified, removed, err = root.TableDiff(ctx, root2)
-	assert.NoError(t, err)
-
-	if len(removed) != 1 || removed[0] != "tbl1" || len(modified)+len(added) != 0 {
-		t.Error("Bad table diff after adding a single table")
-	}
-
-	rowData, _ := createTestRowData(t, ddb.ValueReadWriter(), sch)
-	tbl1Updated, _ := createTestTable(ddb.ValueReadWriter(), sch, rowData)
-
-	root3, err := root.PutTable(ctx, "tbl1", tbl1Updated)
-	assert.NoError(t, err)
-
-	added, modified, removed, err = root3.TableDiff(ctx, root2)
-	assert.NoError(t, err)
-
-	if len(modified) != 1 || modified[0] != "tbl1" || len(added)+len(removed) != 0 {
-		t.Error("Bad table diff after adding a single table")
-	}
-
-	added, modified, removed, err = root2.TableDiff(ctx, root3)
-	assert.NoError(t, err)
-
-	if len(modified) != 1 || modified[0] != "tbl1" || len(added)+len(removed) != 0 {
-		t.Error("Bad table diff after adding a single table")
-	}
-
-	cc, _ := schema.NewColCollection(
-		schema.NewColumn("id", uint64(100), types.UUIDKind, true, schema.NotNullConstraint{}),
-	)
-	tbl2, err := createTestTable(ddb.ValueReadWriter(), schema.SchemaFromCols(cc), m)
-	assert.NoError(t, err)
-
-	root4, err := root3.PutTable(ctx, "tbl2", tbl2)
-	assert.NoError(t, err)
-
-	added, modified, removed, err = root2.TableDiff(ctx, root4)
-	assert.NoError(t, err)
-	if len(modified) != 1 || modified[0] != "tbl1" || len(removed) != 1 || removed[0] != "tbl2" || +len(added) != 0 {
-		t.Error("Bad table diff after adding a second table")
-	}
-
-	added, modified, removed, err = root4.TableDiff(ctx, root2)
-	assert.NoError(t, err)
-	if len(modified) != 1 || modified[0] != "tbl1" || len(added) != 1 || added[0] != "tbl2" || +len(removed) != 0 {
-		t.Error("Bad table diff after adding a second table")
-	}
-}
 
 func TestDocDiff(t *testing.T) {
 	ctx := context.Background()
@@ -134,7 +51,7 @@ func TestDocDiff(t *testing.T) {
 
 	// Create tbl1 with one license row
 	sch := createTestDocsSchema()
-	licRow := getDocRow(t, sch, LicensePk, types.String("license row"))
+	licRow := makeDocRow(t, sch, LicensePk, types.String("license row"))
 	m, _ := createTestRows(t, ddb.ValueReadWriter(), sch, []row.Row{licRow})
 	tbl1, err := createTestTable(ddb.ValueReadWriter(), sch, m)
 	assert.NoError(t, err)
@@ -152,7 +69,7 @@ func TestDocDiff(t *testing.T) {
 	}
 
 	// Create tbl2 with one readme row
-	readmeRow := getDocRow(t, sch, ReadmePk, types.String("readme row"))
+	readmeRow := makeDocRow(t, sch, ReadmePk, types.String("readme row"))
 	m, _ = createTestRows(t, ddb.ValueReadWriter(), sch, []row.Row{readmeRow})
 	tbl2, err := createTestTable(ddb.ValueReadWriter(), sch, m)
 	assert.NoError(t, err)
@@ -170,7 +87,7 @@ func TestDocDiff(t *testing.T) {
 	}
 
 	// Create tbl3 with 2 doc rows (readme, license)
-	readmeRowUpdated := getDocRow(t, sch, ReadmePk, types.String("a different readme"))
+	readmeRowUpdated := makeDocRow(t, sch, ReadmePk, types.String("a different readme"))
 	m, _ = createTestRows(t, ddb.ValueReadWriter(), sch, []row.Row{readmeRowUpdated, licRow})
 	tbl3, err := createTestTable(ddb.ValueReadWriter(), sch, m)
 	assert.NoError(t, err)
@@ -308,20 +225,24 @@ func createTestDocsSchema() schema.Schema {
 		schema.NewColumn(DocPkColumnName, DocNameTag, types.StringKind, true, schema.NotNullConstraint{}),
 		schema.NewColumn(DocTextColumnName, DocTextTag, types.StringKind, false),
 	)
-	return schema.SchemaFromCols(typedColColl)
+	sch, err := schema.SchemaFromCols(typedColColl)
+	if err != nil {
+		panic(err)
+	}
+	return sch
 }
 
 func getDocRows(t *testing.T, sch schema.Schema, rowVal types.Value) []row.Row {
 	rows := make([]row.Row, 2)
-	row1 := getDocRow(t, sch, LicensePk, rowVal)
+	row1 := makeDocRow(t, sch, LicensePk, rowVal)
 	rows[0] = row1
-	row2 := getDocRow(t, sch, ReadmePk, rowVal)
+	row2 := makeDocRow(t, sch, ReadmePk, rowVal)
 	rows[1] = row2
 
 	return rows
 }
 
-func getDocRow(t *testing.T, sch schema.Schema, pk string, rowVal types.Value) row.Row {
+func makeDocRow(t *testing.T, sch schema.Schema, pk string, rowVal types.Value) row.Row {
 	row, err := row.New(types.Format_7_18, sch, row.TaggedValues{
 		DocNameTag: types.String(pk),
 		DocTextTag: rowVal,

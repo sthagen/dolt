@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -63,7 +63,7 @@ func TestSqlBatchInserts(t *testing.T) {
 	CreateTestDatabase(dEnv, t)
 	root, _ := dEnv.WorkingRoot(ctx)
 
-	db := NewBatchedDatabase("dolt", dEnv.DoltDB, dEnv.RepoState, dEnv.RepoStateWriter())
+	db := NewBatchedDatabase("dolt", dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter())
 	engine, sqlCtx, err := NewTestEngine(ctx, db, root)
 	require.NoError(t, err)
 
@@ -151,7 +151,7 @@ func TestSqlBatchInsertIgnoreReplace(t *testing.T) {
 	CreateTestDatabase(dEnv, t)
 	root, _ := dEnv.WorkingRoot(ctx)
 
-	db := NewBatchedDatabase("dolt", dEnv.DoltDB, dEnv.RepoState, dEnv.RepoStateWriter())
+	db := NewBatchedDatabase("dolt", dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter())
 	engine, sqlCtx, err := NewTestEngine(ctx, db, root)
 	require.NoError(t, err)
 
@@ -189,7 +189,7 @@ func TestSqlBatchInsertErrors(t *testing.T) {
 	CreateTestDatabase(dEnv, t)
 	root, _ := dEnv.WorkingRoot(ctx)
 
-	db := NewBatchedDatabase("dolt", dEnv.DoltDB, dEnv.RepoState, dEnv.RepoStateWriter())
+	db := NewBatchedDatabase("dolt", dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter())
 	engine, sqlCtx, err := NewTestEngine(ctx, db, root)
 	require.NoError(t, err)
 

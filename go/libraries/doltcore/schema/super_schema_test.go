@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -54,7 +54,7 @@ var nameCollisionWithSch1 = mustSchema([]Column{
 
 var tagCollisionWithSch1 = mustSchema([]Column{
 	strCol("a", 1, true),
-	{"collision", 2, types.IntKind, false, typeinfo.Int32Type, "", "", nil},
+	{"collision", 2, types.IntKind, false, typeinfo.Int32Type, "", false, "", nil},
 })
 
 type SuperSchemaTest struct {
@@ -226,7 +226,7 @@ func superSchemaDeepEqual(t *testing.T, ss1, ss2 *SuperSchema) {
 }
 
 func mustSchema(cols []Column) Schema {
-	return SchemaFromCols(mustColColl(cols))
+	return MustSchemaFromCols(mustColColl(cols))
 }
 
 func mustColColl(cols []Column) *ColCollection {
@@ -238,5 +238,5 @@ func mustColColl(cols []Column) *ColCollection {
 }
 
 func strCol(name string, tag uint64, isPK bool) Column {
-	return Column{name, tag, types.StringKind, isPK, typeinfo.StringDefaultType, "", "", nil}
+	return Column{name, tag, types.StringKind, isPK, typeinfo.StringDefaultType, "", false, "", nil}
 }

@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -98,6 +98,9 @@ type TypeInfo interface {
 
 	// ParseValue parses a string and returns a go value that represents it according to this type.
 	ParseValue(str *string) (types.Value, error)
+
+	// Promote will promote the current TypeInfo to the largest representing TypeInfo of the same kind, such as Int8 to Int64.
+	Promote() TypeInfo
 
 	// ToSqlType returns the TypeInfo as a sql.Type. If an exact match is able to be made then that is
 	// the one returned, otherwise the sql.Type is the closest match possible.

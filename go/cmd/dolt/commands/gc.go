@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import (
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
+	eventsapi "github.com/dolthub/dolt/go/gen/proto/dolt/services/eventsapi/v1alpha1"
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
@@ -77,6 +78,11 @@ func (cmd GarbageCollectionCmd) createArgParser() *argparser.ArgParser {
 	return ap
 }
 
+// EventType returns the type of the event to log
+func (cmd GarbageCollectionCmd) EventType() eventsapi.ClientEventType {
+	return eventsapi.ClientEventType_GARBAGE_COLLECTION
+}
+
 // Version displays the version of the running dolt client
 // Exec executes the command
 func (cmd GarbageCollectionCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
@@ -101,7 +107,7 @@ func (cmd GarbageCollectionCmd) Exec(ctx context.Context, commandStr string, arg
 		}
 	} else {
 		// full gc
-		dEnv, err = maybeMigrateEnv(ctx, dEnv)
+		dEnv, err = MaybeMigrateEnv(ctx, dEnv)
 
 		if err != nil {
 			verr = errhand.BuildDError("could not load manifest for gc").AddCause(err).Build()
@@ -121,7 +127,7 @@ func (cmd GarbageCollectionCmd) Exec(ctx context.Context, commandStr string, arg
 	return HandleVErrAndExitCode(verr, usage)
 }
 
-func maybeMigrateEnv(ctx context.Context, dEnv *env.DoltEnv) (*env.DoltEnv, error) {
+func MaybeMigrateEnv(ctx context.Context, dEnv *env.DoltEnv) (*env.DoltEnv, error) {
 	migrated, err := nbs.MaybeMigrateFileManifest(ctx, dbfactory.DoltDataDir)
 	if err != nil {
 		return nil, err

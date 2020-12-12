@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema/encoding"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -35,6 +34,7 @@ const (
 	conflictsKey       = "conflicts"
 	conflictSchemasKey = "conflict_schemas"
 	indexesKey         = "indexes"
+	autoIncrementKey   = "auto_increment"
 
 	// TableNameRegexStr is the regular expression that valid tables must match.
 	TableNameRegexStr = `^[a-zA-Z]{1}$|^[a-zA-Z]+[-_0-9a-zA-Z]*[0-9a-zA-Z]+$`
@@ -54,47 +54,19 @@ type Table struct {
 	tableStruct types.Struct
 }
 
-// NewTable creates a noms Struct which stores the schema and the row data. If indexData is nil, then it is rebuilt.
-func NewTable(ctx context.Context, vrw types.ValueReadWriter, schemaVal types.Value, rowData types.Map, indexData *types.Map) (*Table, error) {
-	if indexData == nil {
-		sch, err := encoding.UnmarshalSchemaNomsValue(ctx, rowData.Format(), schemaVal)
-		if err != nil {
-			return nil, err
-		}
-		indexesMap, err := types.NewMap(ctx, vrw)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, index := range sch.Indexes().AllIndexes() {
-			rebuiltIndexRowData, err := rebuildIndexRowData(ctx, vrw, sch, rowData, index)
-			if err != nil {
-				return nil, err
-			}
-			rebuiltIndexRowDataRef, err := writeValAndGetRef(ctx, vrw, rebuiltIndexRowData)
-			if err != nil {
-				return nil, err
-			}
-			indexesMap, err = indexesMap.Edit().Set(types.String(index.Name()), rebuiltIndexRowDataRef).Map(ctx)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		indexData = &indexesMap
-	}
-
-	schemaRef, err := writeValAndGetRef(ctx, vrw, schemaVal)
+// NewTable creates a noms Struct which stores row data, index data, and schema.
+func NewTable(ctx context.Context, vrw types.ValueReadWriter, schemaVal types.Value, rowData types.Map, indexData types.Map) (*Table, error) {
+	schemaRef, err := WriteValAndGetRef(ctx, vrw, schemaVal)
 	if err != nil {
 		return nil, err
 	}
 
-	rowDataRef, err := writeValAndGetRef(ctx, vrw, rowData)
+	rowDataRef, err := WriteValAndGetRef(ctx, vrw, rowData)
 	if err != nil {
 		return nil, err
 	}
 
-	indexesRef, err := writeValAndGetRef(ctx, vrw, indexData)
+	indexesRef, err := WriteValAndGetRef(ctx, vrw, indexData)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +95,7 @@ func (t *Table) ValueReadWriter() types.ValueReadWriter {
 }
 
 func (t *Table) SetConflicts(ctx context.Context, schemas Conflict, conflictData types.Map) (*Table, error) {
-	conflictsRef, err := writeValAndGetRef(ctx, t.vrw, conflictData)
+	conflictsRef, err := WriteValAndGetRef(ctx, t.vrw, conflictData)
 
 	if err != nil {
 		return nil, err
@@ -221,7 +193,6 @@ func (t *Table) NumRowsInConflict(ctx context.Context) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-
 		confMap = v.(types.Map)
 	}
 
@@ -330,7 +301,7 @@ func (t *Table) UpdateSchema(ctx context.Context, sch schema.Schema) (*Table, er
 	if err != nil {
 		return nil, err
 	}
-	newTable, err := NewTable(ctx, t.vrw, newSchemaVal, rowData, &indexData)
+	newTable, err := NewTable(ctx, t.vrw, newSchemaVal, rowData, indexData)
 	if err != nil {
 		return nil, err
 	}
@@ -363,95 +334,10 @@ func (t *Table) HashOf() (hash.Hash, error) {
 	return t.tableStruct.Hash(t.vrw.Format())
 }
 
-func (t *Table) GetRowByPKVals(ctx context.Context, pkVals row.TaggedValues, sch schema.Schema) (row.Row, bool, error) {
-	pkTuple := pkVals.NomsTupleForPKCols(t.vrw.Format(), sch.GetPKCols())
-	pkTupleVal, err := pkTuple.Value(ctx)
-
-	if err != nil {
-		return nil, false, err
-	}
-
-	return t.GetRow(ctx, pkTupleVal.(types.Tuple), sch)
-}
-
-// GetRow uses the noms DestRef containing the row data to lookup a row by primary key.  If a valid row exists with this pk
-// then the supplied TableRowFactory will be used to create a TableRow using the row data.
-func (t *Table) GetRow(ctx context.Context, pk types.Tuple, sch schema.Schema) (row.Row, bool, error) {
-	rowMap, err := t.GetRowData(ctx)
-
-	if err != nil {
-		return nil, false, err
-	}
-
-	fieldsVal, _, err := rowMap.MaybeGet(ctx, pk)
-
-	if err != nil {
-		return nil, false, err
-	}
-
-	if fieldsVal == nil {
-		return nil, false, nil
-	}
-
-	r, err := row.FromNoms(sch, pk, fieldsVal.(types.Tuple))
-
-	if err != nil {
-		return nil, false, err
-	}
-
-	return r, true, nil
-}
-
-// GetRows takes in a PKItr which will supply a stream of primary keys to be pulled from the table.  Each key is
-// looked up sequentially.  If row data exists for a given pk it is converted to a TableRow, and added to the rows
-// slice. If row data does not exist for a given pk it will be added to the missing slice.  The numPKs argument, if
-// known helps allocate the right amount of memory for the results, but if the number of pks being requested isn't
-// known then 0 can be used.
-func (t *Table) GetRows(ctx context.Context, pkItr PKItr, numPKs int, sch schema.Schema) (rows []row.Row, missing []types.Value, err error) {
-	if numPKs < 0 {
-		numPKs = 0
-	}
-
-	rows = make([]row.Row, 0, numPKs)
-	missing = make([]types.Value, 0, numPKs)
-
-	rowMap, err := t.GetRowData(ctx)
-
-	if err != nil {
-		return nil, nil, err
-	}
-
-	for pk, ok, err := pkItr(); ok; pk, ok, err = pkItr() {
-		if err != nil {
-			return nil, nil, err
-		}
-
-		fieldsVal, _, err := rowMap.MaybeGet(ctx, pk)
-
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if fieldsVal == nil {
-			missing = append(missing, pk)
-		} else {
-			r, err := row.FromNoms(sch, pk, fieldsVal.(types.Tuple))
-
-			if err != nil {
-				return nil, nil, err
-			}
-
-			rows = append(rows, r)
-		}
-	}
-
-	return rows, missing, nil
-}
-
 // UpdateRows replaces the current row data and returns and updated Table.  Calls to UpdateRows will not be written to the
 // database.  The root must be updated with the updated table, and the root must be committed or written.
 func (t *Table) UpdateRows(ctx context.Context, updatedRows types.Map) (*Table, error) {
-	rowDataRef, err := writeValAndGetRef(ctx, t.vrw, updatedRows)
+	rowDataRef, err := WriteValAndGetRef(ctx, t.vrw, updatedRows)
 
 	if err != nil {
 		return nil, err
@@ -516,7 +402,7 @@ func (t *Table) ResolveConflicts(ctx context.Context, pkTuples []types.Value) (i
 		return nil, nil, nil, err
 	}
 
-	conflictsRef, err := writeValAndGetRef(ctx, t.vrw, conflicts)
+	conflictsRef, err := WriteValAndGetRef(ctx, t.vrw, conflicts)
 
 	if err != nil {
 		return nil, nil, nil, err
@@ -553,48 +439,9 @@ func (t *Table) GetIndexData(ctx context.Context) (types.Map, error) {
 	return indexesMap.(types.Map), nil
 }
 
-// RebuildIndexData rebuilds all of the data for each index, and returns an updated Table.
-func (t *Table) RebuildIndexData(ctx context.Context) (*Table, error) {
-	sch, err := t.GetSchema(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	if sch.Indexes().Count() == 0 {
-		return t, nil
-	}
-
-	tableRowData, err := t.GetRowData(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	indexesMap, err := t.GetIndexData(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, index := range sch.Indexes().AllIndexes() {
-		rebuiltIndexRowData, err := rebuildIndexRowData(ctx, t.vrw, sch, tableRowData, index)
-		if err != nil {
-			return nil, err
-		}
-		rebuiltIndexRowDataRef, err := writeValAndGetRef(ctx, t.vrw, rebuiltIndexRowData)
-		if err != nil {
-			return nil, err
-		}
-		indexesMap, err = indexesMap.Edit().Set(types.String(index.Name()), rebuiltIndexRowDataRef).Map(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return t.SetIndexData(ctx, indexesMap)
-}
-
 // SetIndexData replaces the current internal index map, and returns an updated Table.
 func (t *Table) SetIndexData(ctx context.Context, indexesMap types.Map) (*Table, error) {
-	indexesRef, err := writeValAndGetRef(ctx, t.vrw, indexesMap)
+	indexesRef, err := WriteValAndGetRef(ctx, t.vrw, indexesMap)
 	if err != nil {
 		return nil, err
 	}
@@ -630,30 +477,6 @@ func (t *Table) GetIndexRowData(ctx context.Context, indexName string) (types.Ma
 	return indexMap.(types.Map), nil
 }
 
-// RebuildIndexRowData rebuilds the data for the given index, and returns the updated Map.
-func (t *Table) RebuildIndexRowData(ctx context.Context, indexName string) (types.Map, error) {
-	sch, err := t.GetSchema(ctx)
-	if err != nil {
-		return types.EmptyMap, err
-	}
-
-	tableRowData, err := t.GetRowData(ctx)
-	if err != nil {
-		return types.EmptyMap, err
-	}
-
-	index := sch.Indexes().GetByName(indexName)
-	if index == nil {
-		return types.EmptyMap, fmt.Errorf("index `%s` does not exist", indexName)
-	}
-
-	rebuiltIndexData, err := rebuildIndexRowData(ctx, t.vrw, sch, tableRowData, index)
-	if err != nil {
-		return types.EmptyMap, err
-	}
-	return rebuiltIndexData, nil
-}
-
 // SetIndexRowData replaces the current row data for the given index and returns an updated Table.
 func (t *Table) SetIndexRowData(ctx context.Context, indexName string, indexRowData types.Map) (*Table, error) {
 	indexesMap, err := t.GetIndexData(ctx)
@@ -661,7 +484,7 @@ func (t *Table) SetIndexRowData(ctx context.Context, indexName string, indexRowD
 		return nil, err
 	}
 
-	indexRowDataRef, err := writeValAndGetRef(ctx, t.vrw, indexRowData)
+	indexRowDataRef, err := WriteValAndGetRef(ctx, t.vrw, indexRowData)
 	if err != nil {
 		return nil, err
 	}
@@ -759,35 +582,50 @@ func (t *Table) VerifyIndexRowData(ctx context.Context, indexName string) error 
 	return index.VerifyMap(ctx, iter, indexMapValue.(types.Map).Format())
 }
 
-func rebuildIndexRowData(ctx context.Context, vrw types.ValueReadWriter, sch schema.Schema, tblRowData types.Map, index schema.Index) (types.Map, error) {
-	emptyIndexMap, err := types.NewMap(ctx, vrw)
+func (t *Table) GetAutoIncrementValue(ctx context.Context) (types.Value, error) {
+	val, ok, err := t.tableStruct.MaybeGet(autoIncrementKey)
 	if err != nil {
-		return types.EmptyMap, err
+		return nil, err
 	}
-	indexEditor := NewIndexEditor(index, emptyIndexMap)
+	if ok {
+		return val, nil
+	}
 
-	err = tblRowData.IterAll(ctx, func(key, value types.Value) error {
-		dRow, err := row.FromNoms(sch, key.(types.Tuple), value.(types.Tuple))
-		if err != nil {
-			return err
+	sch, err := t.GetSchema(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	kind := types.UnknownKind
+	_ = sch.GetAllCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
+		if col.AutoIncrement {
+			kind = col.Kind
+			stop = true
 		}
-		indexRow, err := dRow.ReduceToIndex(index)
-		if err != nil {
-			return err
-		}
-		err = indexEditor.UpdateIndex(ctx, nil, indexRow)
-		if err != nil {
-			return err
-		}
-		return nil
+		return
 	})
-	if err != nil {
-		return types.EmptyMap, err
+	switch kind {
+	case types.IntKind:
+		return types.Int(1), nil
+	case types.UintKind:
+		return types.Uint(1), nil
+	case types.FloatKind:
+		return types.Float(1), nil
+	default:
+		return nil, fmt.Errorf("auto increment set for non-numeric column type")
 	}
+}
 
-	rebuiltIndexMap, err := indexEditor.Map(ctx)
-	if err != nil {
-		return types.EmptyMap, err
+func (t *Table) SetAutoIncrementValue(val types.Value) (*Table, error) {
+	switch val.(type) {
+	case types.Int, types.Uint, types.Float:
+		st, err := t.tableStruct.Set(autoIncrementKey, val)
+		if err != nil {
+			return nil, err
+		}
+		return &Table{t.vrw, st}, nil
+
+	default:
+		return nil, fmt.Errorf("cannot set auto increment to non-numeric value")
 	}
-	return rebuiltIndexMap, nil
 }

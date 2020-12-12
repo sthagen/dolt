@@ -1,4 +1,4 @@
-// Copyright 2019-2020 Liquidata, Inc.
+// Copyright 2019-2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,8 +34,10 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema/alterschema"
-	sqleSchema "github.com/dolthub/dolt/go/libraries/doltcore/sqle/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dtables"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/sqlfmt"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/sqlutil"
+	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/types"
 )
@@ -203,56 +205,55 @@ func (db Database) GetTableInsensitive(ctx *sql.Context, tblName string) (sql.Ta
 	return db.GetTableInsensitiveWithRoot(ctx, root, tblName)
 }
 
-func (db Database) GetTableInsensitiveWithRoot(ctx *sql.Context, root *doltdb.RootValue, tblName string) (sql.Table, bool, error) {
+func (db Database) GetTableInsensitiveWithRoot(ctx *sql.Context, root *doltdb.RootValue, tblName string) (dt sql.Table, found bool, err error) {
 	lwrName := strings.ToLower(tblName)
 
-	prefixToNew := map[string]func(*sql.Context, Database, string) (sql.Table, error){
-		doltdb.DoltDiffTablePrefix:    NewDiffTable,
-		doltdb.DoltHistoryTablePrefix: NewHistoryTable,
-		doltdb.DoltConfTablePrefix:    NewConflictsTable,
+	head, _, err := DSessFromSess(ctx.Session).GetParentCommit(ctx, db.name)
+	if err != nil {
+		return nil, false, err
 	}
 
-	for prefix, newFunc := range prefixToNew {
-		if strings.HasPrefix(lwrName, prefix) {
-			tblName = tblName[len(prefix):]
-			dt, err := newFunc(ctx, db, tblName)
-
-			if err != nil {
-				return nil, false, err
-			}
-
-			return dt, true, nil
-		}
+	// NOTE: system tables are not suitable for caching
+	switch {
+	case strings.HasPrefix(lwrName, doltdb.DoltDiffTablePrefix):
+		suffix := tblName[len(doltdb.DoltDiffTablePrefix):]
+		found = true
+		dt, err = dtables.NewDiffTable(ctx, suffix, db.ddb, root, head)
+	case strings.HasPrefix(lwrName, doltdb.DoltCommitDiffTablePrefix):
+		suffix := tblName[len(doltdb.DoltCommitDiffTablePrefix):]
+		found = true
+		dt, err = dtables.NewCommitDiffTable(ctx, suffix, db.ddb, root)
+	case strings.HasPrefix(lwrName, doltdb.DoltHistoryTablePrefix):
+		suffix := tblName[len(doltdb.DoltHistoryTablePrefix):]
+		found = true
+		dt, err = dtables.NewHistoryTable(ctx, suffix, db.ddb, root, head)
+	case strings.HasPrefix(lwrName, doltdb.DoltConfTablePrefix):
+		suffix := tblName[len(doltdb.DoltConfTablePrefix):]
+		found = true
+		dt, err = dtables.NewConflictsTable(ctx, suffix, root, dtables.RootSetter(db))
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if found {
+		return dt, found, nil
 	}
 
-	if lwrName == doltdb.LogTableName {
-		lt, err := NewLogTable(ctx, db.Name())
-
-		if err != nil {
-			return nil, false, err
-		}
-
-		return lt, true, nil
+	// NOTE: system tables are not suitable for caching
+	switch lwrName {
+	case doltdb.LogTableName:
+		dt, found = dtables.NewLogTable(ctx, db.ddb, head), true
+	case doltdb.TableOfTablesInConflictName:
+		dt, found = dtables.NewTableOfTablesInConflict(ctx, db.ddb, root), true
+	case doltdb.BranchesTableName:
+		dt, found = dtables.NewBranchesTable(ctx, db.ddb), true
+	case doltdb.CommitsTableName:
+		dt, found = dtables.NewCommitsTable(ctx, db.ddb), true
+	case doltdb.CommitAncestorsTableName:
+		dt, found = dtables.NewCommitAncestorsTable(ctx, db.ddb), true
 	}
-
-	if lwrName == doltdb.TableOfTablesInConflictName {
-		ct, err := NewTableOfTablesInConflict(ctx, db.Name())
-
-		if err != nil {
-			return nil, false, err
-		}
-
-		return ct, true, nil
-	}
-
-	if lwrName == doltdb.BranchesTableName {
-		bt, err := NewBranchesTable(ctx, db.Name())
-
-		if err != nil {
-			return nil, false, err
-		}
-
-		return bt, true, nil
+	if found {
+		return dt, found, nil
 	}
 
 	return db.getTable(ctx, root, tblName)
@@ -392,7 +393,7 @@ func (db Database) getTable(ctx context.Context, root *doltdb.RootValue, tableNa
 
 	var table sql.Table
 
-	readonlyTable := DoltTable{name: tableName, table: tbl, sch: sch, db: db}
+	readonlyTable := NewDoltTable(tableName, sch, tbl, db)
 	if doltdb.IsReadOnlySystemTable(tableName) {
 		table = &readonlyTable
 	} else if doltdb.HasDoltPrefix(tableName) {
@@ -598,7 +599,7 @@ func (db Database) createSqlTable(ctx *sql.Context, tableName string, sch sql.Sc
 		return sql.ErrTableAlreadyExists.New(tableName)
 	}
 
-	doltSch, err := sqleSchema.ToDoltSchema(ctx, root, tableName, sch)
+	doltSch, err := sqlutil.ToDoltSchema(ctx, root, tableName, sch)
 	if err != nil {
 		return err
 	}
@@ -811,7 +812,11 @@ func (db Database) addFragToSchemasTable(ctx *sql.Context, fragType, name, defin
 	if err != nil {
 		return err
 	}
-	rowData, err := te.GetRowData(ctx)
+	dTable, err := te.Table(ctx)
+	if err != nil {
+		return err
+	}
+	rowData, err := dTable.GetRowData(ctx)
 	if err != nil {
 		return err
 	}
@@ -867,7 +872,7 @@ func (db Database) dropFragFromSchemasTable(ctx *sql.Context, fragType, name str
 }
 
 // TableEditSession returns the TableEditSession for this database from the given context.
-func (db Database) TableEditSession(ctx *sql.Context) *doltdb.TableEditSession {
+func (db Database) TableEditSession(ctx *sql.Context) *editor.TableEditSession {
 	return DSessFromSess(ctx.Session).dbEditors[db.name]
 }
 

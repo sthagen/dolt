@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -176,6 +176,11 @@ func (ti *setType) ParseValue(str *string) (types.Value, error) {
 		return nil, err
 	}
 	return types.Uint(val), nil
+}
+
+// Promote implements TypeInfo interface.
+func (ti *setType) Promote() TypeInfo {
+	return &setType{ti.sqlSetType.Promote().(sql.SetType)}
 }
 
 // String implements TypeInfo interface.

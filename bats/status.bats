@@ -9,6 +9,14 @@ teardown() {
     teardown_common
 }
 
+@test "dolt version --feature" {
+    # bump this test with feature version bumps
+    run dolt version --feature
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "dolt version" ]] || false
+    [[ "$output" =~ "the current head does not have a feature version" ]] || false
+}
+
 @test "no changes" {
     dolt status
     run dolt status
@@ -141,4 +149,26 @@ SQL
     [[ "$output" =~ "Unstaged changes after reset:" ]] || false
     [[ "$output" =~ "M	one" ]] || false
     [[ "$output" =~ "D	two" ]] || false
+}
+
+@test "dolt reset --hard <commit-spec>" {
+    dolt sql -q "CREATE TABLE test (pk int PRIMARY KEY);"
+    dolt add -A && dolt commit -m "made table test"
+    dolt sql -q "INSERT INTO test VALUES (1);"
+    dolt add -A && dolt commit -m "inserted 1"
+    dolt sql -q "INSERT INTO test VALUES (2);"
+    dolt add -A && dolt commit -m "inserted 2"
+    dolt sql -q "INSERT INTO test VALUES (3);"
+
+    run dolt reset --hard HEAD^
+    [ "$status" -eq 0 ]
+
+    run dolt status
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "On branch master" ]] || false
+    [[ "$output" =~ "nothing to commit, working tree clean" ]] || false
+
+    run dolt sql -q "SELECT sum(pk) FROM test" -r csv
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "1" ]] || false
 }

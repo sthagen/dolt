@@ -1,4 +1,4 @@
-// Copyright 2019-2020 Liquidata, Inc.
+// Copyright 2019-2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -203,7 +203,7 @@ func newSessionBuilder(sqlEngine *sqle.Engine, username, email string, autocommi
 }
 
 func newDatabase(name string, dEnv *env.DoltEnv) dsqle.Database {
-	return dsqle.NewDatabase(name, dEnv.DoltDB, dEnv.RepoState, dEnv.RepoStateWriter())
+	return dsqle.NewDatabase(name, dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter())
 }
 
 func dbsAsDSQLDBs(dbs []sql.Database) []dsqle.Database {

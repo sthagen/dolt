@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -62,11 +62,6 @@ func (tr *AsyncReadAheadTableReader) ReadRow(ctx context.Context) (row.Row, erro
 	}
 
 	return obj.(row.Row), err
-}
-
-// VerifySchema checks that the incoming schema matches the schema from the existing table
-func (tr *AsyncReadAheadTableReader) VerifySchema(outSch schema.Schema) (bool, error) {
-	return tr.backingReader.VerifySchema(outSch)
 }
 
 // Close releases resources being held

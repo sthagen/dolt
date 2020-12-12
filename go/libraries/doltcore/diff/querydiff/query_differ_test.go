@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -475,6 +475,11 @@ var engineTestSkipSet = []string{
 func skipEngineTest(test enginetest.QueryTest) bool {
 	h := det.DoltHarness{}
 	if h.SkipQueryTest(test.Query) {
+		return true
+	}
+
+	if test.Bindings != nil {
+		// todo: support bindings in query diff
 		return true
 	}
 

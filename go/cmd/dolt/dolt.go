@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,13 +36,15 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
+	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dfunctions"
 	"github.com/dolthub/dolt/go/libraries/events"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
 	"github.com/dolthub/dolt/go/store/util/tempfiles"
 )
 
 const (
-	Version = "0.21.0"
+	Version = "0.22.6"
 )
 
 var dumpDocsCommand = &commands.DumpDocsCmd{}
@@ -81,11 +83,13 @@ var doltCommand = cli.NewSubCommandHandler("dolt", "it's git for data", []cli.Co
 	indexcmds.Commands,
 	commands.ReadTablesCmd{},
 	commands.GarbageCollectionCmd{},
+	commands.FilterBranchCmd{},
+	commands.VerifyConstraintsCmd{},
 })
 
 func init() {
 	dumpDocsCommand.DoltCommand = doltCommand
-	sqlserver.CliVersion = Version
+	dfunctions.VersionString = Version
 }
 
 const chdirFlag = "--chdir"
@@ -95,6 +99,8 @@ const cpuProf = "cpu"
 const memProf = "mem"
 const blockingProf = "blocking"
 const traceProf = "trace"
+
+const keylessFeatureFlag = "--keyless"
 
 func main() {
 	os.Exit(runMain())
@@ -141,6 +147,10 @@ func runMain() int {
 
 			case csMetricsFlag:
 				csMetrics = true
+				args = args[1:]
+
+			case keylessFeatureFlag:
+				schema.FeatureFlagKeylessSchema = true
 				args = args[1:]
 
 			default:

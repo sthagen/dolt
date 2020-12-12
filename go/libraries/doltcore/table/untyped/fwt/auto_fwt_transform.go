@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -107,13 +107,8 @@ func (asTr *AutoSizingFWTTransformer) handleRow(r pipeline.RowWithProps, outChan
 
 func (asTr *AutoSizingFWTTransformer) flush(outChan chan<- pipeline.RowWithProps, badRowChan chan<- *pipeline.TransformRowFailure, stopChan <-chan struct{}) {
 	if asTr.fwtTr == nil {
-		fwtSch, err := NewFWTSchemaWithWidths(asTr.sch, asTr.printWidths, asTr.maxRunes)
-
-		if err != nil {
-			panic(err)
-		}
-
-		asTr.fwtTr = NewFWTTransformer(fwtSch, asTr.tooLngBhv)
+		fwf := FixedWidthFormatterForSchema(asTr.sch, asTr.tooLngBhv, asTr.printWidths, asTr.maxRunes)
+		asTr.fwtTr = NewFWTTransformer(asTr.sch, fwf)
 	}
 
 	for i := 0; i < len(asTr.rowBuffer); i++ {

@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20270,6 +20270,6 @@ func TestExplain(t *testing.T) {
 		" ├─ TableAlias(d)\n" +
 		" │   └─ Table(daily_summary)\n" +
 		" └─ TableAlias(t)\n" +
-		"     └─ Table(symbols)"
+		"     └─ IndexedTableAccess(symbols on [symbols.Symbol])"
 	assert.Equal(t, expectedExplain, strings.Join(rowStrings, "\n"))
 }

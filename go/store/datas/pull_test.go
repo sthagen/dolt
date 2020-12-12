@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ import (
 	"io"
 	"io/ioutil"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -403,6 +404,8 @@ func (ttfWr *TestTableFileWriter) Close(ctx context.Context) error {
 	data := ttfWr.writer.Bytes()
 	ttfWr.writer = nil
 
+	ttfWr.ttfs.mu.Lock()
+	defer ttfWr.ttfs.mu.Unlock()
 	ttfWr.ttfs.tableFiles[ttfWr.fileID] = &TestTableFile{ttfWr.fileID, ttfWr.numChunks, data}
 	return nil
 }
@@ -410,11 +413,14 @@ func (ttfWr *TestTableFileWriter) Close(ctx context.Context) error {
 type TestTableFileStore struct {
 	root       hash.Hash
 	tableFiles map[string]*TestTableFile
+	mu         sync.Mutex
 }
 
 var _ nbs.TableFileStore = &TestTableFileStore{}
 
 func (ttfs *TestTableFileStore) Sources(ctx context.Context) (hash.Hash, []nbs.TableFile, error) {
+	ttfs.mu.Lock()
+	defer ttfs.mu.Unlock()
 	var tblFiles []nbs.TableFile
 	for _, tblFile := range ttfs.tableFiles {
 		tblFiles = append(tblFiles, tblFile)
@@ -424,6 +430,8 @@ func (ttfs *TestTableFileStore) Sources(ctx context.Context) (hash.Hash, []nbs.T
 }
 
 func (ttfs *TestTableFileStore) Size(ctx context.Context) (uint64, error) {
+	ttfs.mu.Lock()
+	defer ttfs.mu.Unlock()
 	sz := uint64(0)
 	for _, tblFile := range ttfs.tableFiles {
 		sz += uint64(len(tblFile.data))

@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,4 +20,7 @@ var DoltFunctions = []sql.Function{
 	sql.Function1{Name: HashOfFuncName, Fn: NewHashOf},
 	sql.Function1{Name: CommitFuncName, Fn: NewCommitFunc},
 	sql.Function1{Name: MergeFuncName, Fn: NewMergeFunc},
+	sql.Function1{Name: resetFuncName, Fn: NewDoltResetFunc},
+	sql.Function0{Name: VersionFuncName, Fn: NewVersion},
+	sql.FunctionN{Name: DoltCommitFuncName, Fn: NewDoltCommitFunc},
 }

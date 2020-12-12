@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -374,7 +374,7 @@ func assertTableEditorRows(t *testing.T, fk_dEnv *env.DoltEnv, root *doltdb.Root
 		_ = rowData.IterAll(context.Background(), func(key, value types.Value) error {
 			r, err := row.FromNoms(sch, key.(types.Tuple), value.(types.Tuple))
 			assert.NoError(t, err)
-			sqlRow, err := doltRowToSqlRow(r, sch)
+			sqlRow, err := row.DoltRowToSqlRow(r, sch)
 			assert.NoError(t, err)
 			sqlRows = append(sqlRows, sqlRow)
 			return nil
@@ -437,7 +437,7 @@ func assertTableEditorRows(t *testing.T, fk_dEnv *env.DoltEnv, root *doltdb.Root
 			_ = indexRowData.IterAll(context.Background(), func(key, value types.Value) error {
 				r, err := row.FromNoms(indexSch, key.(types.Tuple), value.(types.Tuple))
 				assert.NoError(t, err)
-				sqlRow, err := doltRowToSqlRow(r, indexSch)
+				sqlRow, err := row.DoltRowToSqlRow(r, indexSch)
 				assert.NoError(t, err)
 				sqlRows = append(sqlRows, sqlRow)
 				return nil

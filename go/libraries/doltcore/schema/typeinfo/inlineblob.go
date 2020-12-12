@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -126,6 +126,11 @@ func (ti *inlineBlobType) ParseValue(str *string) (types.Value, error) {
 		return types.InlineBlob(val), nil
 	}
 	return nil, fmt.Errorf(`"%v" cannot convert the string "%v" to a value`, ti.String(), str)
+}
+
+// Promote implements TypeInfo interface.
+func (ti *inlineBlobType) Promote() TypeInfo {
+	return &inlineBlobType{ti.sqlBinaryType.Promote().(sql.StringType)}
 }
 
 // String implements TypeInfo interface.

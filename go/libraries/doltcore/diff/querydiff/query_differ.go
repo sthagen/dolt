@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -249,7 +249,7 @@ func nullSafeRowEquality(left, right sql.Row, sch sql.Schema) (bool, error) {
 }
 
 func makeSqlEngine(ctx context.Context, dEnv *env.DoltEnv, root *doltdb.RootValue) (*sql.Context, *sqle.Engine, error) {
-	doltSqlDB := dsqle.NewDatabase("db", dEnv.DoltDB, dEnv.RepoState, dEnv.RepoStateWriter())
+	doltSqlDB := dsqle.NewDatabase("db", dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter())
 
 	sqlCtx := sql.NewContext(ctx,
 		sql.WithSession(dsqle.DefaultDoltSession()),

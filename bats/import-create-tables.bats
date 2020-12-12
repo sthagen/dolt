@@ -29,10 +29,12 @@ DELIM
     "four":"c3"
 }
 JSON
+
     cat <<DELIM > name-map-data.csv
 one,two,three,four
 0,1,2,3
 DELIM
+
     cat <<SQL > name-map-sch.sql
 CREATE TABLE test (
     pk int not null,
@@ -152,9 +154,17 @@ DELIM
 
 @test "try to table import with nonexistant --pk arg" {
     run dolt table import -c -pk="batmansparents" test 1pk5col-ints.csv
-    [ "$status" -ne 1 ]
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "Error determining the output schema." ]] || false
     skip "--pk args is not validated to be an existing column"
-    [[ ! "$output" =~ "panic" ]] || false
+    [[ "$output" =~ "column 'batmansparents' not found" ]] || false
+}
+
+@test "try to table import with one valid and one nonexistant --pk arg" {
+    run dolt table import -c -pk="pk,batmansparents" test 1pk5col-ints.csv
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "Error determining the output schema." ]] || false
+    skip "--pk args is not validated to be an existing column"
     [[ "$output" =~ "column 'batmansparents' not found" ]] || false
 }
 
@@ -356,11 +366,11 @@ SQL
     [ "${#lines[@]}" -eq 11 ]
     [ "${lines[3]}" = '| a  | ""        | 1         |' ]
     [ "${lines[4]}" = '| b  |           | 2         |' ]
-    [ "${lines[5]}" = "| c  | <NULL>    | 3         |" ]
-    [ "${lines[6]}" = '| d  | row four  | <NULL>    |' ]
-    [ "${lines[7]}" = "| e  | row five  | <NULL>    |" ]
+    [ "${lines[5]}" = "| c  | NULL      | 3         |" ]
+    [ "${lines[6]}" = '| d  | row four  | NULL      |' ]
+    [ "${lines[7]}" = "| e  | row five  | NULL      |" ]
     [ "${lines[8]}" = "| f  | row six   | 6         |" ]
-    [ "${lines[9]}" = "| g  | <NULL>    | <NULL>    |" ]
+    [ "${lines[9]}" = "| g  | NULL      | NULL      |" ]
 }
 
 @test "table import with schema different from data file" {
@@ -404,11 +414,11 @@ SQL
     [ "${#lines[@]}" -eq 11 ]
     [ "${lines[3]}" = '| a  | ""        | 1         |' ]
     [ "${lines[4]}" = '| b  |           | 2         |' ]
-    [ "${lines[5]}" = "| c  | <NULL>    | 3         |" ]
+    [ "${lines[5]}" = "| c  | NULL      | 3         |" ]
     [ "${lines[6]}" = "| d  | row four  |           |" ]
-    [ "${lines[7]}" = "| e  | row five  | <NULL>    |" ]
+    [ "${lines[7]}" = "| e  | row five  | NULL      |" ]
     [ "${lines[8]}" = "| f  | row six   | 6         |" ]
-    [ "${lines[9]}" = "| g  | <NULL>    | <NULL>    |" ]
+    [ "${lines[9]}" = "| g  | NULL      | NULL      |" ]
 }
 
 @test "create a table with null values from json import with json file" {
@@ -431,11 +441,11 @@ SQL
     [ "${#lines[@]}" -eq 11 ]
     [ "${lines[3]}" = '| a  | ""        | 1         |' ]
     [ "${lines[4]}" = '| b  |           | 2         |' ]
-    [ "${lines[5]}" = "| c  | <NULL>    | 3         |" ]
-    [ "${lines[6]}" = "| d  | row four  | <NULL>    |" ]
-    [ "${lines[7]}" = "| e  | row five  | <NULL>    |" ]
+    [ "${lines[5]}" = "| c  | NULL      | 3         |" ]
+    [ "${lines[6]}" = "| d  | row four  | NULL      |" ]
+    [ "${lines[7]}" = "| e  | row five  | NULL      |" ]
     [ "${lines[8]}" = "| f  | row six   | 6         |" ]
-    [ "${lines[9]}" = "| g  | <NULL>    | <NULL>    |" ]
+    [ "${lines[9]}" = "| g  | NULL      | NULL      |" ]
 }
 
 @test "fail to create a table with null values from json import with json file" {
@@ -449,6 +459,25 @@ CREATE TABLE test (
 SQL
     run dolt table import -u test `batshelper empty-strings-null-values.json`
     [ "$status" -eq 1 ]
+}
+
+@test "fail on import table creation when defined pk has a NULL value" {
+    cat <<DELIM > null-pk-1.csv
+pk,v1
+"a",1
+,2
+DELIM
+    cat <<DELIM > null-pk-2.csv
+pk1,pk2,v1
+0,0,0
+1,,1
+DELIM
+    run dolt table import -c --pk=pk test null-pk-1.csv
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "pk" ]]
+    run dolt table import -c --pk=pk1,pk2 test null-pk-2.csv
+    [ "$status" -eq 1 ]
+    [[ "$output" =~ "pk2" ]]
 }
 
 @test "table import -c infers types from data" {
@@ -469,4 +498,20 @@ DELIM
     [[ "$output" =~ "\`date\` date" ]]
     [[ "$output" =~ "\`time\` time" ]]
     [[ "$output" =~ "\`datetime\` datetime" ]]
+}
+
+@test "table import -c collects garbage" {
+    echo "pk" > pk.csv
+    seq 0 100000 >> pk.csv
+
+    run dolt table import -c -pk=pk test pk.csv
+    [ "$status" -eq 0 ]
+
+    # assert that we already collected garbage
+    BEFORE=$(du .dolt/noms/ | sed 's/[^0-9]*//g')
+    dolt gc
+    AFTER=$(du .dolt/noms/ | sed 's/[^0-9]*//g')
+
+    # less than 10% smaller
+    [ "$BEFORE" -lt $(($AFTER * 11 / 10)) ]
 }

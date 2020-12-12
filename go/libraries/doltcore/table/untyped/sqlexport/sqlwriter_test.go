@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,13 +38,6 @@ type StringBuilderCloser struct {
 
 func (*StringBuilderCloser) Close() error {
 	return nil
-}
-
-type test struct {
-	name           string
-	rows           []row.Row
-	sch            schema.Schema
-	expectedOutput string
 }
 
 func TestEndToEnd(t *testing.T) {
@@ -89,9 +82,13 @@ func TestEndToEnd(t *testing.T) {
 
 			schVal, err := encoding.MarshalSchemaAsNomsValue(ctx, root.VRW(), tt.sch)
 			require.NoError(t, err)
-			emptyMap, err := types.NewMap(ctx, root.VRW())
+			empty, err := types.NewMap(ctx, root.VRW())
 			require.NoError(t, err)
-			tbl, err := doltdb.NewTable(ctx, root.VRW(), schVal, emptyMap, nil)
+			idxRef, err := types.NewRef(empty, root.VRW().Format())
+			require.NoError(t, err)
+			idxMap, err := types.NewMap(ctx, root.VRW(), types.String(dtestutils.IndexName), idxRef)
+			require.NoError(t, err)
+			tbl, err := doltdb.NewTable(ctx, root.VRW(), schVal, empty, idxMap)
 			require.NoError(t, err)
 			root, err = root.PutTable(ctx, tableName, tbl)
 			require.NoError(t, err)

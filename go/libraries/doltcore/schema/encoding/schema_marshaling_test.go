@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package encoding
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -40,13 +41,9 @@ func createTestSchema() schema.Schema {
 		schema.NewColumn("last", 2, types.StringKind, false, schema.NotNullConstraint{}),
 		schema.NewColumn("age", 3, types.UintKind, false),
 	}
-	for i := range columns {
-		columns[i].Default = `""`
-		columns[i].Comment = "hello world"
-	}
 
 	colColl, _ := schema.NewColCollection(columns...)
-	sch := schema.SchemaFromCols(colColl)
+	sch := schema.MustSchemaFromCols(colColl)
 	_, _ = sch.Indexes().AddIndexByColTags("idx_age", []uint64{3}, schema.IndexProperties{IsUnique: false, Comment: ""})
 	return sch
 }
@@ -78,7 +75,7 @@ func TestNomsMarshalling(t *testing.T) {
 	validated, err := validateUnmarshaledNomsValue(context.Background(), types.Format_7_18, val)
 
 	if err != nil {
-		t.Fatal("Failed compatibility test. Schema could not be unmarshalled with mirror type")
+		t.Fatal(fmt.Sprintf("Failed compatibility test. Schema could not be unmarshalled with mirror type, error: %s", err.Error()))
 	}
 
 	if !reflect.DeepEqual(tSchema, validated) {
@@ -149,11 +146,12 @@ func TestTypeInfoMarshalling(t *testing.T) {
 		t.Run(sqlType.String(), func(t *testing.T) {
 			ti, err := typeinfo.FromSqlType(sqlType)
 			require.NoError(t, err)
-			col, err := schema.NewColumnWithTypeInfo("pk", 1, ti, true, "", "")
+			col, err := schema.NewColumnWithTypeInfo("pk", 1, ti, true, "", false, "")
 			require.NoError(t, err)
 			colColl, err := schema.NewColCollection(col)
 			require.NoError(t, err)
-			originalSch := schema.SchemaFromCols(colColl)
+			originalSch, err := schema.SchemaFromCols(colColl)
+			require.NoError(t, err)
 
 			nbf, err := types.GetFormatForVersionString(constants.FormatDefaultString)
 			require.NoError(t, err)
@@ -194,8 +192,8 @@ func TestMirroredTypes(t *testing.T) {
 
 // testEncodedColumn is a mirror type of encodedColumn that helps ensure compatibility between Dolt versions
 //
-// Fields in this test struct should be added WITHOUT the "omitempty" annotation in order to guarantee that
-// all fields in encodeColumn are always being written when encodedColumn is serialized.
+// If a field in encodedColumn is not optional, it should be added WITHOUT the "omitempty" annotation here
+// in order to guarantee that all fields in encodeColumn are always being written when encodedColumn is serialized.
 // See the comment above type encodeColumn.
 type testEncodedColumn struct {
 	Tag uint64 `noms:"tag" json:"tag"`
@@ -208,9 +206,11 @@ type testEncodedColumn struct {
 
 	TypeInfo encodedTypeInfo `noms:"typeinfo" json:"typeinfo"`
 
-	Default string `noms:"default" json:"default"`
+	Default string `noms:"default,omitempty" json:"default,omitempty"`
 
-	Comment string `noms:"comment" json:"comment"`
+	AutoIncrement bool `noms:"auto_increment,omitempty" json:"auto_increment,omitempty"`
+
+	Comment string `noms:"comment,omitempty" json:"comment,omitempty"`
 
 	Constraints []encodedConstraint `noms:"col_constraints" json:"col_constraints"`
 }
@@ -242,7 +242,7 @@ func (tec testEncodedColumn) decodeColumn() (schema.Column, error) {
 		return schema.Column{}, errors.New("cannot decode column due to unknown schema format")
 	}
 	colConstraints := decodeAllColConstraint(tec.Constraints)
-	return schema.NewColumnWithTypeInfo(tec.Name, tec.Tag, typeInfo, tec.IsPartOfPK, tec.Default, tec.Comment, colConstraints...)
+	return schema.NewColumnWithTypeInfo(tec.Name, tec.Tag, typeInfo, tec.IsPartOfPK, tec.Default, tec.AutoIncrement, tec.Comment, colConstraints...)
 }
 
 func (tsd testSchemaData) decodeSchema() (schema.Schema, error) {
@@ -263,7 +263,10 @@ func (tsd testSchemaData) decodeSchema() (schema.Schema, error) {
 		return nil, err
 	}
 
-	sch := schema.SchemaFromCols(colColl)
+	sch, err := schema.SchemaFromCols(colColl)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, encodedIndex := range tsd.IndexCollection {
 		_, err = sch.Indexes().AddIndexByColTags(encodedIndex.Name, encodedIndex.Tags, schema.IndexProperties{IsUnique: encodedIndex.Unique, Comment: encodedIndex.Comment})

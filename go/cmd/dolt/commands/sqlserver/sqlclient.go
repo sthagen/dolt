@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,10 +25,10 @@ import (
 
 	"github.com/abiosoft/readline"
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/ishell"
 	"github.com/fatih/color"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gocraft/dbr/v2"
-	"github.com/liquidata-inc/ishell"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
 	"github.com/dolthub/dolt/go/cmd/dolt/commands"

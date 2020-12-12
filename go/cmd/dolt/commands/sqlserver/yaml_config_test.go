@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,8 +39,8 @@ listener:
     host: localhost
     port: 3306
     max_connections: 1
-    read_timeout_millis: 30000
-    write_timeout_millis: 30000
+    read_timeout_millis: 28800000
+    write_timeout_millis: 28800000
     
 databases:
     - name: irs_soi

@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
-	sqleSchema "github.com/dolthub/dolt/go/libraries/doltcore/sqle/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/sqlutil"
 	"github.com/dolthub/dolt/go/store/types"
 )
 
@@ -76,7 +76,7 @@ func (db *SingleTableInfoDatabase) String() string {
 
 // Schema implements sql.Table.
 func (db *SingleTableInfoDatabase) Schema() sql.Schema {
-	sqlSch, err := sqleSchema.FromDoltSchema(db.tableName, db.sch)
+	sqlSch, err := sqlutil.FromDoltSchema(db.tableName, db.sch)
 	if err != nil {
 		panic(err)
 	}

@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ import (
 func TestSchemaTableRecreation(t *testing.T) {
 	ctx := NewTestSQLCtx(context.Background())
 	dEnv := dtestutils.CreateTestEnv()
-	db := NewDatabase("dolt", dEnv.DoltDB, dEnv.RepoState, dEnv.RepoStateWriter())
+	db := NewDatabase("dolt", dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter())
 	err := DSessFromSess(ctx.Session).AddDB(ctx, db)
 	require.NoError(t, err)
 	ctx.SetCurrentDatabase(db.Name())
@@ -63,7 +63,7 @@ func TestSchemaTableRecreation(t *testing.T) {
 	_ = rowData.IterAll(ctx, func(keyTpl, valTpl types.Value) error {
 		dRow, err := row.FromNoms(sqlTbl.(*WritableDoltTable).sch, keyTpl.(types.Tuple), valTpl.(types.Tuple))
 		require.NoError(t, err)
-		sqlRow, err := doltRowToSqlRow(dRow, sqlTbl.(*WritableDoltTable).sch)
+		sqlRow, err := row.DoltRowToSqlRow(dRow, sqlTbl.(*WritableDoltTable).sch)
 		require.NoError(t, err)
 		assert.Equal(t, expectedVals[index], sqlRow)
 		index++
@@ -82,7 +82,7 @@ func TestSchemaTableRecreation(t *testing.T) {
 	_ = rowData.IterAll(ctx, func(keyTpl, valTpl types.Value) error {
 		dRow, err := row.FromNoms(tbl.sch, keyTpl.(types.Tuple), valTpl.(types.Tuple))
 		require.NoError(t, err)
-		sqlRow, err := doltRowToSqlRow(dRow, tbl.sch)
+		sqlRow, err := row.DoltRowToSqlRow(dRow, tbl.sch)
 		require.NoError(t, err)
 		assert.Equal(t, expectedVals[index], sqlRow)
 		index++

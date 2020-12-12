@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -157,7 +157,7 @@ func TestTableEditor(t *testing.T) {
 
 			ctx := NewTestSQLCtx(context.Background())
 			root, _ := dEnv.WorkingRoot(context.Background())
-			db := NewDatabase("dolt", dEnv.DoltDB, dEnv.RepoState, dEnv.RepoStateWriter())
+			db := NewDatabase("dolt", dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter())
 			_ = DSessFromSess(ctx.Session).AddDB(ctx, db)
 			ctx.SetCurrentDatabase(db.Name())
 			err := db.SetRoot(ctx, root)
@@ -187,8 +187,8 @@ func TestTableEditor(t *testing.T) {
 	}
 }
 
-func r(row row.Row, sch schema.Schema) sql.Row {
-	sqlRow, err := doltRowToSqlRow(row, sch)
+func r(r row.Row, sch schema.Schema) sql.Row {
+	sqlRow, err := row.DoltRowToSqlRow(r, sch)
 	if err != nil {
 		panic(err)
 	}

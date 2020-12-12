@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/merge"
+	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 )
 
 type AutoResolveStats struct {
@@ -52,7 +53,7 @@ func AutoResolveTables(ctx context.Context, dEnv *env.DoltEnv, autoResolver merg
 }
 
 func autoResolve(ctx context.Context, dEnv *env.DoltEnv, root *doltdb.RootValue, autoResolver merge.AutoResolver, tbls []string) error {
-	tableEditSession := doltdb.CreateTableEditSession(root, doltdb.TableEditSessionProps{})
+	tableEditSession := editor.CreateTableEditSession(root, editor.TableEditSessionProps{})
 
 	for _, tblName := range tbls {
 		tbl, ok, err := root.GetTable(ctx, tblName)

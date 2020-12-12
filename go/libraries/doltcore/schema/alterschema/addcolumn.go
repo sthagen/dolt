@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,10 +19,11 @@ import (
 	"fmt"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema/encoding"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema/typeinfo"
-	sqleSchema "github.com/dolthub/dolt/go/libraries/doltcore/sqle/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/sqlutil"
 	"github.com/dolthub/dolt/go/store/types"
 )
 
@@ -72,24 +73,22 @@ func updateTableWithNewSchema(ctx context.Context, tblName string, tbl *doltdb.T
 	}
 
 	rowData, err := tbl.GetRowData(ctx)
-
 	if err != nil {
 		return nil, err
 	}
 
 	indexData, err := tbl.GetIndexData(ctx)
-
 	if err != nil {
 		return nil, err
 	}
 
 	if defaultVal == "" {
-		return doltdb.NewTable(ctx, vrw, newSchemaVal, rowData, &indexData)
+		return doltdb.NewTable(ctx, vrw, newSchemaVal, rowData, indexData)
 	}
 
 	me := rowData.Edit()
 
-	newSqlSchema, err := sqleSchema.FromDoltSchema(tblName, newSchema)
+	newSqlSchema, err := sqlutil.FromDoltSchema(tblName, newSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -105,11 +104,11 @@ func updateTableWithNewSchema(ctx context.Context, tblName string, tbl *doltdb.T
 	}
 
 	err = rowData.Iter(ctx, func(k, v types.Value) (stop bool, err error) {
-		oldRow, _, err := tbl.GetRow(ctx, k.(types.Tuple), newSchema)
+		oldRow, err := row.FromNoms(newSchema, k.(types.Tuple), v.(types.Tuple))
 		if err != nil {
 			return true, err
 		}
-		newRow, err := sqleSchema.ApplyDefaults(ctx, newSchema, newSqlSchema, []int{columnIndex}, oldRow)
+		newRow, err := sqlutil.ApplyDefaults(ctx, newSchema, newSqlSchema, []int{columnIndex}, oldRow)
 		if err != nil {
 			return true, err
 		}
@@ -127,7 +126,7 @@ func updateTableWithNewSchema(ctx context.Context, tblName string, tbl *doltdb.T
 		return nil, err
 	}
 
-	return doltdb.NewTable(ctx, vrw, newSchemaVal, m, &indexData)
+	return doltdb.NewTable(ctx, vrw, newSchemaVal, m, indexData)
 }
 
 // addColumnToSchema creates a new schema with a column as specified by the params.
@@ -156,7 +155,10 @@ func addColumnToSchema(sch schema.Schema, tag uint64, newColName string, typeInf
 	if err != nil {
 		return nil, err
 	}
-	newSch := schema.SchemaFromCols(collection)
+	newSch, err := schema.SchemaFromCols(collection)
+	if err != nil {
+		return nil, err
+	}
 	newSch.Indexes().AddIndex(sch.Indexes().AllIndexes()...)
 
 	return newSch, nil
@@ -164,9 +166,9 @@ func addColumnToSchema(sch schema.Schema, tag uint64, newColName string, typeInf
 
 func createColumn(nullable Nullable, newColName string, tag uint64, typeInfo typeinfo.TypeInfo, defaultVal, comment string) (schema.Column, error) {
 	if nullable {
-		return schema.NewColumnWithTypeInfo(newColName, tag, typeInfo, false, defaultVal, comment)
+		return schema.NewColumnWithTypeInfo(newColName, tag, typeInfo, false, defaultVal, false, comment)
 	} else {
-		return schema.NewColumnWithTypeInfo(newColName, tag, typeInfo, false, defaultVal, comment, schema.NotNullConstraint{})
+		return schema.NewColumnWithTypeInfo(newColName, tag, typeInfo, false, defaultVal, false, comment, schema.NotNullConstraint{})
 	}
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2020 Liquidata, Inc.
+// Copyright 2020 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -71,6 +71,11 @@ func (ti *unknownImpl) NomsKind() types.NomsKind {
 // ParseValue implements TypeInfo interface.
 func (ti *unknownImpl) ParseValue(*string) (types.Value, error) {
 	return nil, fmt.Errorf(`"Unknown" cannot convert any strings to a Noms value`)
+}
+
+// Promote implements TypeInfo interface.
+func (ti *unknownImpl) Promote() TypeInfo {
+	return ti
 }
 
 // String implements TypeInfo interface.

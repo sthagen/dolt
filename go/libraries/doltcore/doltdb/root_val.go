@@ -1,4 +1,4 @@
-// Copyright 2019 Liquidata, Inc.
+// Copyright 2019 Dolthub, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,6 +35,7 @@ const (
 	tablesKey       = "tables"
 	superSchemasKey = "super_schemas"
 	foreignKeyKey   = "foreign_key"
+	featureVersKey  = "feature_ver"
 )
 
 // RootValue defines the structure used inside all Liquidata noms dbs
@@ -129,6 +130,16 @@ func newRootFromMaps(vrw types.ValueReadWriter, tblMap types.Map, ssMap types.Ma
 
 func (root *RootValue) VRW() types.ValueReadWriter {
 	return root.vrw
+}
+
+// GetFeatureVersion returns the feature version of this root, if one is written
+func (root *RootValue) GetFeatureVersion(ctx context.Context) (ver int64, ok bool, err error) {
+	v, ok, err := root.valueSt.MaybeGet(featureVersKey)
+	if err != nil || !ok {
+		return ver, ok, err
+	}
+	ver = int64(v.(types.Int))
+	return ver, ok, err
 }
 
 func (root *RootValue) HasTable(ctx context.Context, tName string) (bool, error) {
@@ -622,7 +633,7 @@ func (root *RootValue) PutSuperSchema(ctx context.Context, tName string, ss *sch
 		return nil, err
 	}
 
-	ssRef, err := writeValAndGetRef(ctx, newRoot.VRW(), ssVal)
+	ssRef, err := WriteValAndGetRef(ctx, newRoot.VRW(), ssVal)
 
 	if err != nil {
 		return nil, err
@@ -652,7 +663,7 @@ func (root *RootValue) PutTable(ctx context.Context, tName string, table *Table)
 		return nil, err
 	}
 
-	tableRef, err := writeValAndGetRef(ctx, root.VRW(), table.tableStruct)
+	tableRef, err := WriteValAndGetRef(ctx, root.VRW(), table.tableStruct)
 
 	if err != nil {
 		return nil, err
@@ -698,12 +709,29 @@ func (root *RootValue) CreateEmptyTable(ctx context.Context, tName string, sch s
 		return nil, err
 	}
 
-	m, err := types.NewMap(ctx, root.VRW())
+	empty, err := types.NewMap(ctx, root.VRW())
 	if err != nil {
 		return nil, err
 	}
 
-	tbl, err := NewTable(ctx, root.VRW(), schVal, m, nil)
+	emptyRef, err := WriteValAndGetRef(ctx, root.VRW(), empty)
+	if err != nil {
+		return nil, err
+	}
+
+	ed := empty.Edit()
+	sch.Indexes().Iter(func(index schema.Index) (stop bool, err error) {
+		// create an empty indexRowData map for every index
+		ed.Set(types.String(index.Name()), emptyRef)
+		return
+	})
+
+	indexes, err := ed.Map(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	tbl, err := NewTable(ctx, root.VRW(), schVal, empty, indexes)
 	if err != nil {
 		return nil, err
 	}
@@ -719,104 +747,6 @@ func (root *RootValue) CreateEmptyTable(ctx context.Context, tName string, sch s
 // HashOf gets the hash of the root value
 func (root *RootValue) HashOf() (hash.Hash, error) {
 	return root.valueSt.Hash(root.vrw.Format())
-}
-
-// TableDiff returns the slices of tables added, modified, and removed when compared with another root value.  Tables
-// In this instance that are not in the other instance are considered added, and tables in the other instance and not
-// this instance are considered removed.
-func (root *RootValue) TableDiff(ctx context.Context, other *RootValue) (added, modified, removed []string, err error) {
-	added = []string{}
-	modified = []string{}
-	removed = []string{}
-
-	tableMap, err := root.getTableMap()
-
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	otherMap, err := other.getTableMap()
-
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	itr1, err := tableMap.Iterator(ctx)
-
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	itr2, err := otherMap.Iterator(ctx)
-
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	pk1, val1, err := itr1.Next(ctx)
-
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	pk2, val2, err := itr2.Next(ctx)
-
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	for pk1 != nil || pk2 != nil {
-		if pk1 == nil || pk2 == nil || !pk1.Equals(pk2) {
-			var pk2IsNilOrGreater bool
-			if pk1 == nil {
-				pk2IsNilOrGreater = false
-			} else {
-				pk2IsNilOrGreater = pk2 == nil
-
-				if !pk2IsNilOrGreater {
-					pk2IsNilOrGreater, err = pk1.Less(root.vrw.Format(), pk2)
-
-					if err != nil {
-						return nil, nil, nil, err
-					}
-				}
-			}
-
-			if pk2IsNilOrGreater {
-				added = append(added, string(pk1.(types.String)))
-				pk1, val1, err = itr1.Next(ctx)
-
-				if err != nil {
-					return nil, nil, nil, err
-				}
-			} else {
-				removed = append(removed, string(pk2.(types.String)))
-				pk2, val2, err = itr2.Next(ctx)
-
-				if err != nil {
-					return nil, nil, nil, err
-				}
-			}
-		} else {
-
-			if !val1.Equals(val2) {
-				modified = append(modified, string(pk1.(types.String)))
-			}
-
-			pk1, val1, err = itr1.Next(ctx)
-
-			if err != nil {
-				return nil, nil, nil, err
-			}
-
-			pk2, val2, err = itr2.Next(ctx)
-
-			if err != nil {
-				return nil, nil, nil, err
-			}
-		}
-	}
-	return added, modified, removed, nil
 }
 
 // UpdateTablesFromOther takes the tables from the given root and applies them to the calling root, along with any
@@ -940,7 +870,7 @@ func (root *RootValue) UpdateSuperSchemasFromOther(ctx context.Context, tblNames
 			return nil, err
 		}
 
-		ssRef, err := writeValAndGetRef(ctx, newRoot.VRW(), ssVal)
+		ssRef, err := WriteValAndGetRef(ctx, newRoot.VRW(), ssVal)
 
 		if err != nil {
 			return nil, err
@@ -1338,11 +1268,12 @@ func addValuesToDocs(ctx context.Context, tbl *Table, sch *schema.Schema, docDet
 // AddValueToDocFromTbl updates the Value field of a docDetail using the provided table and schema.
 func AddValueToDocFromTbl(ctx context.Context, tbl *Table, sch *schema.Schema, docDetail DocDetails) (DocDetails, error) {
 	if tbl != nil && sch != nil {
-		pkTaggedVal := row.TaggedValues{
-			DocNameTag: types.String(docDetail.DocPk),
+		key, err := DocTblKeyFromName(tbl.Format(), docDetail.DocPk)
+		if err != nil {
+			return DocDetails{}, err
 		}
 
-		docRow, ok, err := tbl.GetRowByPKVals(ctx, pkTaggedVal, *sch)
+		docRow, ok, err := getDocRow(ctx, tbl, *sch, key)
 		if err != nil {
 			return DocDetails{}, err
 		}
@@ -1362,11 +1293,12 @@ func AddValueToDocFromTbl(ctx context.Context, tbl *Table, sch *schema.Schema, d
 // AddNewerTextToDocFromTbl updates the NewerText field of a docDetail using the provided table and schema.
 func AddNewerTextToDocFromTbl(ctx context.Context, tbl *Table, sch *schema.Schema, doc DocDetails) (DocDetails, error) {
 	if tbl != nil && sch != nil {
-		pkTaggedVal := row.TaggedValues{
-			DocNameTag: types.String(doc.DocPk),
+		key, err := DocTblKeyFromName(tbl.Format(), doc.DocPk)
+		if err != nil {
+			return DocDetails{}, err
 		}
 
-		docRow, ok, err := tbl.GetRowByPKVals(ctx, pkTaggedVal, *sch)
+		docRow, ok, err := getDocRow(ctx, tbl, *sch, key)
 		if err != nil {
 			return DocDetails{}, err
 		}
