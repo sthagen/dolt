@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -74,58 +73,6 @@ func IsWorkingKey(key string) (bool, string) {
 	return false, ""
 }
 
-type tableCache struct {
-	mu     *sync.Mutex
-	tables map[*doltdb.RootValue]map[string]sql.Table
-}
-
-func (tc *tableCache) Get(tableName string, root *doltdb.RootValue) (sql.Table, bool) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	tablesForRoot, ok := tc.tables[root]
-
-	if !ok {
-		return nil, false
-	}
-
-	tbl, ok := tablesForRoot[tableName]
-
-	return tbl, ok
-}
-
-func (tc *tableCache) Put(tableName string, root *doltdb.RootValue, tbl sql.Table) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	tablesForRoot, ok := tc.tables[root]
-
-	if !ok {
-		tablesForRoot = make(map[string]sql.Table)
-		tc.tables[root] = tablesForRoot
-	}
-
-	tablesForRoot[tableName] = tbl
-}
-
-func (tc *tableCache) AllForRoot(root *doltdb.RootValue) (map[string]sql.Table, bool) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	tablesForRoot, ok := tc.tables[root]
-
-	if ok {
-		copyOf := make(map[string]sql.Table, len(tablesForRoot))
-		for name, tbl := range tablesForRoot {
-			copyOf[name] = tbl
-		}
-
-		return copyOf, true
-	}
-
-	return nil, false
-}
-
 type SqlDatabase interface {
 	sql.Database
 	GetRoot(*sql.Context) (*doltdb.RootValue, error)
@@ -137,8 +84,8 @@ type Database struct {
 	ddb       *doltdb.DoltDB
 	rsr       env.RepoStateReader
 	rsw       env.RepoStateWriter
+	drw       env.DocsReadWriter
 	batchMode commitBehavior
-	tc        *tableCache
 }
 
 var _ SqlDatabase = Database{}
@@ -149,27 +96,27 @@ var _ sql.TableRenamer = Database{}
 var _ sql.TriggerDatabase = Database{}
 
 // NewDatabase returns a new dolt database to use in queries.
-func NewDatabase(name string, ddb *doltdb.DoltDB, rsr env.RepoStateReader, rsw env.RepoStateWriter) Database {
+func NewDatabase(name string, dbData env.DbData) Database {
 	return Database{
 		name:      name,
-		ddb:       ddb,
-		rsr:       rsr,
-		rsw:       rsw,
+		ddb:       dbData.Ddb,
+		rsr:       dbData.Rsr,
+		rsw:       dbData.Rsw,
+		drw:       dbData.Drw,
 		batchMode: single,
-		tc:        &tableCache{&sync.Mutex{}, make(map[*doltdb.RootValue]map[string]sql.Table)},
 	}
 }
 
 // NewBatchedDatabase returns a new dolt database executing in batch insert mode. Integrators must call Flush() to
 // commit any outstanding edits.
-func NewBatchedDatabase(name string, ddb *doltdb.DoltDB, rsr env.RepoStateReader, rsw env.RepoStateWriter) Database {
+func NewBatchedDatabase(name string, dbData env.DbData) Database {
 	return Database{
 		name:      name,
-		ddb:       ddb,
-		rsr:       rsr,
-		rsw:       rsw,
+		ddb:       dbData.Ddb,
+		rsr:       dbData.Rsr,
+		rsw:       dbData.Rsw,
+		drw:       dbData.Drw,
 		batchMode: batched,
-		tc:        &tableCache{&sync.Mutex{}, make(map[*doltdb.RootValue]map[string]sql.Table)},
 	}
 }
 
@@ -191,6 +138,10 @@ func (db Database) GetStateReader() env.RepoStateReader {
 // GetStateWriter gets the RepoStateWriter for a Database
 func (db Database) GetStateWriter() env.RepoStateWriter {
 	return db.rsw
+}
+
+func (db Database) GetDocsReadWriter() env.DocsReadWriter {
+	return db.drw
 }
 
 // GetTableInsensitive is used when resolving tables in queries. It returns a best-effort case-insensitive match for
@@ -251,6 +202,8 @@ func (db Database) GetTableInsensitiveWithRoot(ctx *sql.Context, root *doltdb.Ro
 		dt, found = dtables.NewCommitsTable(ctx, db.ddb), true
 	case doltdb.CommitAncestorsTableName:
 		dt, found = dtables.NewCommitAncestorsTable(ctx, db.ddb), true
+	case doltdb.StatusTableName:
+		dt, found = dtables.NewStatusTable(ctx, db.ddb, db.rsr, db.drw), true
 	}
 	if found {
 		return dt, found, nil
@@ -363,8 +316,9 @@ func (db Database) GetTableNamesAsOf(ctx *sql.Context, time interface{}) ([]stri
 
 // getTable gets the table with the exact name given at the root value given. The database caches tables for all root
 // values to avoid doing schema lookups on every table lookup, which are expensive.
-func (db Database) getTable(ctx context.Context, root *doltdb.RootValue, tableName string) (sql.Table, bool, error) {
-	if table, ok := db.tc.Get(tableName, root); ok {
+func (db Database) getTable(ctx *sql.Context, root *doltdb.RootValue, tableName string) (sql.Table, bool, error) {
+	cache := TableCacheFromSess(ctx.Session, db.name)
+	if table, ok := cache.Get(tableName, root); ok {
 		return table, true, nil
 	}
 
@@ -402,7 +356,7 @@ func (db Database) getTable(ctx context.Context, root *doltdb.RootValue, tableNa
 		table = &AlterableDoltTable{WritableDoltTable{DoltTable: readonlyTable, db: db}}
 	}
 
-	db.tc.Put(tableName, root, table)
+	cache.Put(tableName, root, table)
 
 	return table, true, nil
 }
@@ -676,12 +630,12 @@ func (db Database) RenameTable(ctx *sql.Context, oldName, newName string) error 
 // Flush flushes the current batch of outstanding changes and returns any errors.
 func (db Database) Flush(ctx *sql.Context) error {
 	root, err := db.GetRoot(ctx)
-
 	if err != nil {
 		return err
 	}
 
-	tables, ok := db.tc.AllForRoot(root)
+	cache := TableCacheFromSess(ctx.Session, db.name)
+	tables, ok := cache.AllForRoot(root)
 
 	if ok {
 		for _, table := range tables {
@@ -891,7 +845,7 @@ func RegisterSchemaFragments(ctx *sql.Context, db Database, root *doltdb.RootVal
 	}
 
 	tbl := stbl.(*WritableDoltTable)
-	iter, err := newRowIterator(&tbl.DoltTable, ctx, nil)
+	iter, err := newRowIterator(&tbl.DoltTable, ctx, nil, nil)
 	if err != nil {
 		return err
 	}

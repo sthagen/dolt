@@ -15,6 +15,7 @@
 package typeinfo
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -43,8 +44,22 @@ func (ti *uuidType) ConvertNomsValueToValue(v types.Value) (interface{}, error) 
 	return nil, fmt.Errorf(`"%v" cannot convert NomsKind "%v" to a value`, ti.String(), v.Kind())
 }
 
+// ReadFrom reads a go value from a noms types.CodecReader directly
+func (ti *uuidType) ReadFrom(_ *types.NomsBinFormat, reader types.CodecReader) (interface{}, error) {
+	k := reader.ReadKind()
+	switch k {
+	case types.UUIDKind:
+		val := reader.ReadUUID()
+		return val.String(), nil
+	case types.NullKind:
+		return nil, nil
+	}
+
+	return nil, fmt.Errorf(`"%v" cannot convert NomsKind "%v" to a value`, ti.String(), k)
+}
+
 // ConvertValueToNomsValue implements TypeInfo interface.
-func (ti *uuidType) ConvertValueToNomsValue(v interface{}) (types.Value, error) {
+func (ti *uuidType) ConvertValueToNomsValue(ctx context.Context, vrw types.ValueReadWriter, v interface{}) (types.Value, error) {
 	switch val := v.(type) {
 	case nil:
 		return types.NullValue, nil
@@ -109,7 +124,7 @@ func (ti *uuidType) NomsKind() types.NomsKind {
 }
 
 // ParseValue implements TypeInfo interface.
-func (ti *uuidType) ParseValue(str *string) (types.Value, error) {
+func (ti *uuidType) ParseValue(ctx context.Context, vrw types.ValueReadWriter, str *string) (types.Value, error) {
 	if str == nil || *str == "" {
 		return types.NullValue, nil
 	}

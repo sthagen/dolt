@@ -42,6 +42,7 @@ var _ enginetest.SkippingHarness = (*DoltHarness)(nil)
 var _ enginetest.IndexHarness = (*DoltHarness)(nil)
 var _ enginetest.VersionedDBHarness = (*DoltHarness)(nil)
 var _ enginetest.ForeignKeyHarness = (*DoltHarness)(nil)
+var _ enginetest.KeylessTableHarness = (*DoltHarness)(nil)
 
 func newDoltHarness(t *testing.T) *DoltHarness {
 	session, err := sqle.NewDoltSession(context.Background(), enginetest.NewBaseSession(), "test", "email@test.com")
@@ -69,7 +70,6 @@ func (d *DoltHarness) SkipQueryTest(query string) bool {
 		lowerQuery == "show variables" || // we set extra variables
 		strings.Contains(lowerQuery, "show create table") || // we set extra comment info
 		strings.Contains(lowerQuery, "show indexes from") || // we create / expose extra indexes (for foreign keys)
-		strings.Contains(lowerQuery, "on duplicate key update") || // not working yet
 		query == `SELECT i FROM mytable mt 
 						 WHERE (SELECT i FROM mytable where i = mt.i and i > 2) IS NOT NULL
 						 AND (SELECT i2 FROM othertable where i2 = i) IS NOT NULL
@@ -112,13 +112,17 @@ func (d *DoltHarness) SupportsForeignKeys() bool {
 	return true
 }
 
+func (d *DoltHarness) SupportsKeylessTables() bool {
+	return true
+}
+
 func (d *DoltHarness) NewDatabase(name string) sql.Database {
 	dEnv := dtestutils.CreateTestEnv()
 	root, err := dEnv.WorkingRoot(enginetest.NewContext(d))
 	require.NoError(d.t, err)
 
 	d.mrEnv.AddEnv(name, dEnv)
-	db := sqle.NewDatabase(name, dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter())
+	db := sqle.NewDatabase(name, dEnv.DbData())
 	require.NoError(d.t, d.session.AddDB(enginetest.NewContext(d), db))
 	require.NoError(d.t, db.SetRoot(enginetest.NewContext(d).WithCurrentDB(db.Name()), root))
 	return db
@@ -161,14 +165,14 @@ func (d *DoltHarness) SnapshotTable(db sql.VersionedDatabase, name string, asOf 
 
 	if _, err := e.Catalog.FunctionRegistry.Function(dfunctions.CommitFuncName); sql.ErrFunctionNotFound.Is(err) {
 		require.NoError(d.t,
-			e.Catalog.FunctionRegistry.Register(sql.Function1{Name: dfunctions.CommitFuncName, Fn: dfunctions.NewCommitFunc}))
+			e.Catalog.FunctionRegistry.Register(sql.FunctionN{Name: dfunctions.CommitFuncName, Fn: dfunctions.NewCommitFunc}))
 	}
 
 	asOfString, ok := asOf.(string)
 	require.True(d.t, ok)
 
 	_, iter, err := e.Query(enginetest.NewContext(d),
-		"set @@"+ddb.HeadKey()+" = COMMIT('test commit');")
+		"set @@"+ddb.HeadKey()+" = COMMIT('-m', 'test commit');")
 	require.NoError(d.t, err)
 	_, err = sql.RowIterToRows(iter)
 	require.NoError(d.t, err)

@@ -17,9 +17,8 @@ package sqle
 import (
 	"github.com/dolthub/go-mysql-server/sql"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/row"
-
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/sqlutil"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 )
 
@@ -58,7 +57,7 @@ func newSqlTableEditor(ctx *sql.Context, t *WritableDoltTable) (*sqlTableEditor,
 }
 
 func (te *sqlTableEditor) Insert(ctx *sql.Context, sqlRow sql.Row) error {
-	dRow, err := row.SqlRowToDoltRow(te.t.table.Format(), sqlRow, te.t.sch)
+	dRow, err := sqlutil.SqlRowToDoltRow(ctx, te.t.table.ValueReadWriter(), sqlRow, te.t.sch)
 	if err != nil {
 		return err
 	}
@@ -67,25 +66,20 @@ func (te *sqlTableEditor) Insert(ctx *sql.Context, sqlRow sql.Row) error {
 }
 
 func (te *sqlTableEditor) Delete(ctx *sql.Context, sqlRow sql.Row) error {
-	dRow, err := row.SqlRowToDoltRow(te.t.table.Format(), sqlRow, te.t.sch)
+	dRow, err := sqlutil.SqlRowToDoltRow(ctx, te.t.table.ValueReadWriter(), sqlRow, te.t.sch)
 	if err != nil {
 		return err
 	}
 
-	key, err := row.KeyTupleFromRow(ctx, dRow, te.t.sch)
-	if err != nil {
-		return err
-	}
-
-	return te.tableEditor.DeleteKey(ctx, key)
+	return te.tableEditor.DeleteRow(ctx, dRow)
 }
 
 func (te *sqlTableEditor) Update(ctx *sql.Context, oldRow sql.Row, newRow sql.Row) error {
-	dOldRow, err := row.SqlRowToDoltRow(te.t.table.Format(), oldRow, te.t.sch)
+	dOldRow, err := sqlutil.SqlRowToDoltRow(ctx, te.t.table.ValueReadWriter(), oldRow, te.t.sch)
 	if err != nil {
 		return err
 	}
-	dNewRow, err := row.SqlRowToDoltRow(te.t.table.Format(), newRow, te.t.sch)
+	dNewRow, err := sqlutil.SqlRowToDoltRow(ctx, te.t.table.ValueReadWriter(), newRow, te.t.sch)
 	if err != nil {
 		return err
 	}
@@ -99,7 +93,7 @@ func (te *sqlTableEditor) GetAutoIncrementValue() (interface{}, error) {
 }
 
 func (te *sqlTableEditor) SetAutoIncrementValue(ctx *sql.Context, val interface{}) error {
-	nomsVal, err := te.t.DoltTable.autoIncCol.TypeInfo.ConvertValueToNomsValue(val)
+	nomsVal, err := te.t.DoltTable.autoIncCol.TypeInfo.ConvertValueToNomsValue(ctx, te.t.table.ValueReadWriter(), val)
 	if err != nil {
 		return err
 	}

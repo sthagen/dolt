@@ -24,8 +24,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdocs"
 	"github.com/dolthub/dolt/go/libraries/doltcore/dtestutils"
-	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/envtestutils"
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
@@ -1444,9 +1444,11 @@ func TestAsOfQueries(t *testing.T) {
 
 func TestJoins(t *testing.T) {
 	for _, tt := range JoinTests {
-		t.Run(tt.Name, func(t *testing.T) {
-			testSelectQuery(t, tt)
-		})
+		if tt.Name == "Join from table with two key columns to table with one key column" {
+			t.Run(tt.Name, func(t *testing.T) {
+				testSelectQuery(t, tt)
+			})
+		}
 	}
 }
 
@@ -1463,15 +1465,15 @@ var systemTableSelectTests = []SelectTest{
 	{
 		Name: "select from dolt_docs",
 		AdditionalSetup: CreateTableFn("dolt_docs",
-			env.DoltDocsSchema,
-			NewRowWithSchema(env.DoltDocsSchema,
+			doltdocs.Schema,
+			NewRowWithSchema(doltdocs.Schema,
 				types.String("LICENSE.md"),
 				types.String("A license")),
 		),
 		Query: "select * from dolt_docs",
-		ExpectedRows: ToSqlRows(CompressSchema(env.DoltDocsSchema),
+		ExpectedRows: ToSqlRows(CompressSchema(doltdocs.Schema),
 			NewRow(types.String("LICENSE.md"), types.String("A license"))),
-		ExpectedSchema: CompressSchema(env.DoltDocsSchema),
+		ExpectedSchema: CompressSchema(doltdocs.Schema),
 	},
 	{
 		Name: "select from dolt_query_catalog",

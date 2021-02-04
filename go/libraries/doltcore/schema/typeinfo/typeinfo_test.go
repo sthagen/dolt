@@ -15,6 +15,7 @@
 package typeinfo
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -104,6 +105,8 @@ func verifyTypeInfoArrays(t *testing.T, tiArrays [][]TypeInfo, vaArrays [][]type
 
 // assuming valid data, verifies that the To-From interface{} functions can round trip
 func testTypeInfoConvertRoundTrip(t *testing.T, tiArrays [][]TypeInfo, vaArrays [][]types.Value) {
+	nbf := types.Format_Default
+
 	for rowIndex, tiArray := range tiArrays {
 		t.Run(tiArray[0].GetTypeIdentifier().String(), func(t *testing.T) {
 			for _, ti := range tiArray {
@@ -115,7 +118,8 @@ func testTypeInfoConvertRoundTrip(t *testing.T, tiArrays [][]TypeInfo, vaArrays 
 							if ti.IsValid(val) {
 								atLeastOneValid = true
 								require.NoError(t, err)
-								outVal, err := ti.ConvertValueToNomsValue(vInterface)
+								vrw := types.NewMemoryValueStore()
+								outVal, err := ti.ConvertValueToNomsValue(context.Background(), vrw, vInterface)
 								require.NoError(t, err)
 								if ti == DateType { // Special case as DateType removes the hh:mm:ss
 									val = types.Timestamp(time.Time(val.(types.Timestamp)).Truncate(24 * time.Hour))
@@ -123,6 +127,18 @@ func testTypeInfoConvertRoundTrip(t *testing.T, tiArrays [][]TypeInfo, vaArrays 
 								} else if ti.GetTypeIdentifier() != DecimalTypeIdentifier { // Any Decimal's on-disk representation varies by precision/scale
 									require.True(t, val.Equals(outVal), "\"%v\"\n\"%v\"", val, outVal)
 								}
+
+								tup, err := types.NewTuple(nbf, outVal)
+								require.NoError(t, err)
+
+								itr, err := tup.Iterator()
+								require.NoError(t, err)
+
+								reader, n := itr.CodecReader()
+								require.Equal(t, uint64(1), n)
+
+								readVal, err := ti.ReadFrom(nbf, reader)
+								require.Equal(t, readVal, vInterface)
 							}
 						})
 					}
@@ -213,7 +229,8 @@ func testTypeInfoFormatParseRoundTrip(t *testing.T, tiArrays [][]TypeInfo, vaArr
 							if ti.IsValid(val) {
 								atLeastOneValid = true
 								require.NoError(t, err)
-								outVal, err := ti.ParseValue(str)
+								vrw := types.NewMemoryValueStore()
+								outVal, err := ti.ParseValue(context.Background(), vrw, str)
 								require.NoError(t, err)
 								if ti == DateType { // special case as DateType removes the hh:mm:ss
 									val = types.Timestamp(time.Time(val.(types.Timestamp)).Truncate(24 * time.Hour))
@@ -261,7 +278,8 @@ func testTypeInfoNullHandling(t *testing.T, tiArrays [][]TypeInfo) {
 						require.Nil(t, val)
 					})
 					t.Run("ConvertValueToNomsValue", func(t *testing.T) {
-						tVal, err := ti.ConvertValueToNomsValue(nil)
+						vrw := types.NewMemoryValueStore()
+						tVal, err := ti.ConvertValueToNomsValue(context.Background(), vrw, nil)
 						require.NoError(t, err)
 						require.Equal(t, types.NullValue, tVal)
 					})
@@ -278,7 +296,8 @@ func testTypeInfoNullHandling(t *testing.T, tiArrays [][]TypeInfo) {
 						require.True(t, ti.IsValid(nil))
 					})
 					t.Run("ParseValue", func(t *testing.T) {
-						tVal, err := ti.ParseValue(nil)
+						vrw := types.NewMemoryValueStore()
+						tVal, err := ti.ParseValue(context.Background(), vrw, nil)
 						require.NoError(t, err)
 						require.Equal(t, types.NullValue, tVal)
 					})
@@ -329,7 +348,7 @@ func generateTypeInfoArrays(t *testing.T) ([][]TypeInfo, [][]types.Value) {
 			generateDecimalTypes(t, 16),
 			generateEnumTypes(t, 16),
 			{Float32Type, Float64Type},
-			{InlineBlobType},
+			{DefaultInlineBlobType},
 			{Int8Type, Int16Type, Int24Type, Int32Type, Int64Type},
 			generateSetTypes(t, 16),
 			{TimeType},

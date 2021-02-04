@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        os: [macos-latest, ubuntu-18.04, windows-latest]
     steps:
     - name: Set up Go 1.x
       uses: actions/setup-go@v2
@@ -24,3 +24,10 @@ jobs:
     - name: Test All
       working-directory: ./go
       run: go test -race ./...
+    - name: Discord Notify
+      if: always()
+      uses: dolthub/ga-discord-notify@master
+      with:
+        job-status: ${{ job.status }}
+        webhook-url: ${{ secrets.DISCORD_WEBHOOK }}
+        notify-on-success: false

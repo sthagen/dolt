@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/sqlutil"
-
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
@@ -29,10 +27,12 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/rowconv"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/sqlutil"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/pipeline"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
 	"github.com/dolthub/dolt/go/libraries/utils/set"
+	"github.com/dolthub/dolt/go/store/types"
 )
 
 type CsvOptions struct {
@@ -90,14 +90,25 @@ func (dmce *DataMoverCreationError) String() string {
 	return string(dmce.ErrType) + ": " + dmce.Cause.Error()
 }
 
+type GCTableWriteCloser interface {
+	table.TableWriteCloser
+	GC(ctx context.Context) error
+}
+
 // Move is the method that executes the pipeline which will move data from the pipeline's source DataLocation to it's
 // dest DataLocation.  It returns the number of bad rows encountered during import, and an error.
 func (imp *DataMover) Move(ctx context.Context) (badRowCount int64, err error) {
 	defer imp.Rd.Close(ctx)
 	defer func() {
 		closeErr := imp.Wr.Close(ctx)
-		if closeErr != nil {
+		if err == nil {
 			err = closeErr
+		}
+
+		if err == nil {
+			if gcTWC, ok := imp.Wr.(GCTableWriteCloser); ok {
+				err = gcTWC.GC(ctx)
+			}
 		}
 	}()
 
@@ -196,14 +207,14 @@ func MoveData(ctx context.Context, dEnv *env.DoltEnv, mover *DataMover, mvOpts D
 }
 
 // NameMapTransform creates a pipeline transform that converts rows from inSch to outSch based on a name mapping.
-func NameMapTransform(inSch schema.Schema, outSch schema.Schema, mapper rowconv.NameMapper) (*pipeline.TransformCollection, error) {
+func NameMapTransform(ctx context.Context, vrw types.ValueReadWriter, inSch schema.Schema, outSch schema.Schema, mapper rowconv.NameMapper) (*pipeline.TransformCollection, error) {
 	mapping, err := rowconv.NameMapping(inSch, outSch, mapper)
 
 	if err != nil {
 		return nil, err
 	}
 
-	rconv, err := rowconv.NewImportRowConverter(mapping)
+	rconv, err := rowconv.NewImportRowConverter(ctx, vrw, mapping)
 
 	if err != nil {
 		return nil, err
@@ -242,17 +253,13 @@ func SchAndTableNameFromFile(ctx context.Context, path string, fs filesys.Readab
 func InferSchema(ctx context.Context, root *doltdb.RootValue, rd table.TableReadCloser, tableName string, pks []string, args actions.InferenceArgs) (schema.Schema, error) {
 	var err error
 
-	if len(pks) == 0 {
-		pks = rd.GetSchema().GetPKCols().GetColumnNames()
-	}
-
 	infCols, err := actions.InferColumnTypesFromTableReader(ctx, root, rd, args)
 	if err != nil {
 		return nil, err
 	}
 
 	pkSet := set.NewStrSet(pks)
-	newCols, _ := schema.MapColCollection(infCols, func(col schema.Column) (schema.Column, error) {
+	newCols := schema.MapColCollection(infCols, func(col schema.Column) schema.Column {
 		col.IsPartOfPK = pkSet.Contains(col.Name)
 		if col.IsPartOfPK {
 			hasNotNull := false
@@ -266,7 +273,7 @@ func InferSchema(ctx context.Context, root *doltdb.RootValue, rd table.TableRead
 				col.Constraints = append(col.Constraints, schema.NotNullConstraint{})
 			}
 		}
-		return col, nil
+		return col
 	})
 
 	// check that all provided primary keys are being used
@@ -280,6 +287,11 @@ func InferSchema(ctx context.Context, root *doltdb.RootValue, rd table.TableRead
 	newCols, err = root.GenerateTagsForNewColColl(ctx, tableName, newCols)
 	if err != nil {
 		return nil, errhand.BuildDError("failed to generate new schema").AddCause(err).Build()
+	}
+
+	err = schema.ValidateForInsert(newCols)
+	if err != nil {
+		return nil, errhand.BuildDError("invalid schema").AddCause(err).Build()
 	}
 
 	return schema.SchemaFromCols(newCols)

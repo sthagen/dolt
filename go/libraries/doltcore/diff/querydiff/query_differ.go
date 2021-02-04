@@ -23,6 +23,7 @@ import (
 
 	sqle "github.com/dolthub/go-mysql-server"
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/go-mysql-server/sql/analyzer"
 	"github.com/dolthub/go-mysql-server/sql/expression/function"
 	"github.com/dolthub/go-mysql-server/sql/information_schema"
 	"github.com/dolthub/go-mysql-server/sql/parse"
@@ -32,6 +33,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	dsqle "github.com/dolthub/dolt/go/libraries/doltcore/sqle"
+	"github.com/dolthub/dolt/go/libraries/utils/tracing"
 	"github.com/dolthub/dolt/go/store/atomicerr"
 )
 
@@ -248,16 +250,25 @@ func nullSafeRowEquality(left, right sql.Row, sch sql.Schema) (bool, error) {
 	return left.Equals(right, sch)
 }
 
+func engineForQueryDiffing() *sqle.Engine {
+	c := sql.NewCatalog()
+	ab := analyzer.NewBuilder(c).RemoveOnceAfterRule("pushdown_projections")
+	a := ab.Build()
+
+	return sqle.New(c, a, nil)
+}
+
 func makeSqlEngine(ctx context.Context, dEnv *env.DoltEnv, root *doltdb.RootValue) (*sql.Context, *sqle.Engine, error) {
-	doltSqlDB := dsqle.NewDatabase("db", dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter())
+	doltSqlDB := dsqle.NewDatabase("db", dEnv.DbData())
 
 	sqlCtx := sql.NewContext(ctx,
 		sql.WithSession(dsqle.DefaultDoltSession()),
 		sql.WithIndexRegistry(sql.NewIndexRegistry()),
-		sql.WithViewRegistry(sql.NewViewRegistry()))
+		sql.WithViewRegistry(sql.NewViewRegistry()),
+		sql.WithTracer(tracing.Tracer(ctx)))
 	sqlCtx.SetCurrentDatabase("db")
 
-	engine := sqle.NewDefault()
+	engine := engineForQueryDiffing()
 	engine.AddDatabase(information_schema.NewInformationSchemaDatabase(engine.Catalog))
 
 	dsess := dsqle.DSessFromSess(sqlCtx.Session)

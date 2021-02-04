@@ -19,12 +19,13 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/diff"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdocs"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/utils/set"
 )
 
 func CheckoutAllTables(ctx context.Context, dEnv *env.DoltEnv) error {
-	roots, err := getRoots(ctx, dEnv, WorkingRoot, StagedRoot, HeadRoot)
+	roots, err := getRoots(ctx, dEnv.DoltDB, dEnv.RepoStateReader(), WorkingRoot, StagedRoot, HeadRoot)
 
 	if err != nil {
 		return err
@@ -36,14 +37,14 @@ func CheckoutAllTables(ctx context.Context, dEnv *env.DoltEnv) error {
 		return err
 	}
 
-	docs := *env.AllValidDocDetails
+	docs := doltdocs.SupportedDocs
 
 	return checkoutTablesAndDocs(ctx, dEnv, roots, tbls, docs)
 
 }
 
-func CheckoutTablesAndDocs(ctx context.Context, dEnv *env.DoltEnv, tbls []string, docs []doltdb.DocDetails) error {
-	roots, err := getRoots(ctx, dEnv, WorkingRoot, StagedRoot, HeadRoot)
+func CheckoutTablesAndDocs(ctx context.Context, dEnv *env.DoltEnv, tbls []string, docs doltdocs.Docs) error {
+	roots, err := getRoots(ctx, dEnv.DoltDB, dEnv.RepoStateReader(), WorkingRoot, StagedRoot, HeadRoot)
 
 	if err != nil {
 		return err
@@ -127,7 +128,7 @@ func MoveTablesBetweenRoots(ctx context.Context, tbls []string, src, dest *doltd
 	return dest, nil
 }
 
-func checkoutTablesAndDocs(ctx context.Context, dEnv *env.DoltEnv, roots map[RootType]*doltdb.RootValue, tbls []string, docs []doltdb.DocDetails) error {
+func checkoutTablesAndDocs(ctx context.Context, dEnv *env.DoltEnv, roots map[RootType]*doltdb.RootValue, tbls []string, docs doltdocs.Docs) error {
 	unknownTbls := []string{}
 
 	currRoot := roots[WorkingRoot]
@@ -135,12 +136,13 @@ func checkoutTablesAndDocs(ctx context.Context, dEnv *env.DoltEnv, roots map[Roo
 	head := roots[HeadRoot]
 
 	if len(docs) > 0 {
-		currRootWithDocs, stagedWithDocs, err := getUpdatedWorkingAndStagedWithDocs(ctx, dEnv, currRoot, staged, head, docs)
+		currRootWithDocs, stagedWithDocs, updatedDocs, err := getUpdatedWorkingAndStagedWithDocs(ctx, currRoot, staged, head, docs)
 		if err != nil {
 			return err
 		}
 		currRoot = currRootWithDocs
 		staged = stagedWithDocs
+		docs = updatedDocs
 	}
 
 	for _, tblName := range tbls {
@@ -192,7 +194,7 @@ func checkoutTablesAndDocs(ctx context.Context, dEnv *env.DoltEnv, roots map[Roo
 		return err
 	}
 
-	return SaveDocsFromDocDetails(dEnv, docs)
+	return dEnv.DocsReadWriter().WriteDocsToDisk(docs)
 }
 
 func validateTablesExist(ctx context.Context, currRoot *doltdb.RootValue, unknown []string) error {
@@ -210,4 +212,15 @@ func validateTablesExist(ctx context.Context, currRoot *doltdb.RootValue, unknow
 	}
 
 	return nil
+}
+
+// RemoveDocsTable takes a slice of table names and returns a new slice with DocTableName removed.
+func RemoveDocsTable(tbls []string) []string {
+	var result []string
+	for _, tblName := range tbls {
+		if tblName != doltdb.DocTableName {
+			result = append(result, tblName)
+		}
+	}
+	return result
 }

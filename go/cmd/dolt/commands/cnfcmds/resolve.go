@@ -18,7 +18,9 @@ import (
 	"context"
 
 	eventsapi "github.com/dolthub/dolt/go/gen/proto/dolt/services/eventsapi/v1alpha1"
+	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
+	"github.com/dolthub/dolt/go/store/types"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
 	"github.com/dolthub/dolt/go/cmd/dolt/commands"
@@ -35,9 +37,9 @@ var resDocumentation = cli.CommandDocumentationContent{
 	LongDesc: `
 When a merge operation finds conflicting changes, the rows with the conflicts are added to list of conflicts that must be resolved.  Once the value for the row is resolved in the working set of tables, then the conflict should be resolved.
 		
-In it's first form {{.EmphasisLeft}}dolt conflicts resolve <table> <key>...{{.EmphasisRight}}, resolve runs in manual merge mode resolving the conflicts whose keys are provided.
+In its first form {{.EmphasisLeft}}dolt conflicts resolve <table> <key>...{{.EmphasisRight}}, resolve runs in manual merge mode resolving the conflicts whose keys are provided.
 
-In it's second form {{.EmphasisLeft}}dolt conflicts resolve --ours|--theirs <table>...{{.EmphasisRight}}, resolve runs in auto resolve mode. Where conflicts are resolved using a rule to determine which version of a row should be used.
+In its second form {{.EmphasisLeft}}dolt conflicts resolve --ours|--theirs <table>...{{.EmphasisRight}}, resolve runs in auto resolve mode. Where conflicts are resolved using a rule to determine which version of a row should be used.
 `,
 	Synopsis: []string{
 		`{{.LessThan}}table{{.GreaterThan}} [{{.LessThan}}key_definition{{.GreaterThan}}] {{.LessThan}}key{{.GreaterThan}}...`,
@@ -178,7 +180,7 @@ func manualResolve(ctx context.Context, apr *argparser.ArgParseResults, dEnv *en
 		return errhand.BuildDError("error: failed to get schema").AddCause(err).Build()
 	}
 
-	keysToResolve, err := cli.ParseKeyValues(root.VRW().Format(), sch, args[1:])
+	keysToResolve, err := cli.ParseKeyValues(ctx, root.VRW(), sch, args[1:])
 
 	if err != nil {
 		return errhand.BuildDError("error: parsing command line").AddCause(err).Build()
@@ -191,11 +193,15 @@ func manualResolve(ctx context.Context, apr *argparser.ArgParseResults, dEnv *en
 	}
 
 	for _, key := range invalid {
-		cli.Println(key, "is not a valid key")
+		cli.Printf("(%s) is not a valid key\n", row.TupleFmt(ctx, key.(types.Tuple)))
 	}
 
 	for _, key := range notFound {
-		cli.Println(key, "is not the primary key of a conflicting row")
+		cli.Printf("(%s) is not the primary key of a conflicting row\n", row.TupleFmt(ctx, key.(types.Tuple)))
+	}
+
+	if updatedTbl == nil {
+		return errhand.BuildDError("error: No changes were resolved").Build()
 	}
 
 	updatedHash, err := updatedTbl.HashOf()

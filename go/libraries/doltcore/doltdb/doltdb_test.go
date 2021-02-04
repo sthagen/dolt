@@ -52,7 +52,7 @@ var id2, _ = uuid.NewRandom()
 var id3, _ = uuid.NewRandom()
 
 func createTestSchema(t *testing.T) schema.Schema {
-	colColl, _ := schema.NewColCollection(
+	colColl := schema.NewColCollection(
 		schema.NewColumn("id", idTag, types.UUIDKind, true, schema.NotNullConstraint{}),
 		schema.NewColumn("first", firstTag, types.StringKind, false, schema.NotNullConstraint{}),
 		schema.NewColumn("last", lastTag, types.StringKind, false, schema.NotNullConstraint{}),
@@ -69,7 +69,7 @@ func createTestSchema(t *testing.T) schema.Schema {
 	return sch
 }
 
-func createTestTable(vrw types.ValueReadWriter, tSchema schema.Schema, rowData types.Map) (*Table, error) {
+func CreateTestTable(vrw types.ValueReadWriter, tSchema schema.Schema, rowData types.Map) (*Table, error) {
 	schemaVal, err := encoding.MarshalSchemaAsNomsValue(context.Background(), vrw, tSchema)
 
 	if err != nil {
@@ -77,7 +77,7 @@ func createTestTable(vrw types.ValueReadWriter, tSchema schema.Schema, rowData t
 	}
 
 	empty, _ := types.NewMap(context.Background(), vrw)
-	tbl, err := NewTable(context.Background(), vrw, schemaVal, rowData, empty)
+	tbl, err := NewTable(context.Background(), vrw, schemaVal, rowData, empty, nil)
 
 	if err != nil {
 		return nil, err
@@ -142,37 +142,37 @@ func TestSystemTableTags(t *testing.T) {
 	var sysTableMin uint64 = 1 << 51
 
 	t.Run("asdf", func(t *testing.T) {
-		assert.Equal(t, sysTableMin, SystemTableReservedMin)
+		assert.Equal(t, sysTableMin, schema.SystemTableReservedMin)
 	})
 	t.Run("dolt_doc tags", func(t *testing.T) {
 		docTableMin := sysTableMin + uint64(5)
-		assert.Equal(t, docTableMin+0, DocNameTag)
-		assert.Equal(t, docTableMin+1, DocTextTag)
+		assert.Equal(t, docTableMin+0, schema.DocNameTag)
+		assert.Equal(t, docTableMin+1, schema.DocTextTag)
 	})
 	t.Run("dolt_history_ tags", func(t *testing.T) {
 		doltHistoryMin := sysTableMin + uint64(1000)
-		assert.Equal(t, doltHistoryMin+0, HistoryCommitterTag)
-		assert.Equal(t, doltHistoryMin+1, HistoryCommitHashTag)
-		assert.Equal(t, doltHistoryMin+2, HistoryCommitDateTag)
+		assert.Equal(t, doltHistoryMin+0, schema.HistoryCommitterTag)
+		assert.Equal(t, doltHistoryMin+1, schema.HistoryCommitHashTag)
+		assert.Equal(t, doltHistoryMin+2, schema.HistoryCommitDateTag)
 	})
 	t.Run("dolt_diff_ tags", func(t *testing.T) {
 		diffTableMin := sysTableMin + uint64(2000)
-		assert.Equal(t, diffTableMin+0, DiffCommitTag)
+		assert.Equal(t, diffTableMin+0, schema.DiffCommitTag)
 	})
 	t.Run("dolt_query_catalog tags", func(t *testing.T) {
 		queryCatalogMin := sysTableMin + uint64(3005)
-		assert.Equal(t, queryCatalogMin+0, QueryCatalogIdTag)
-		assert.Equal(t, queryCatalogMin+1, QueryCatalogOrderTag)
-		assert.Equal(t, queryCatalogMin+2, QueryCatalogNameTag)
-		assert.Equal(t, queryCatalogMin+3, QueryCatalogQueryTag)
-		assert.Equal(t, queryCatalogMin+4, QueryCatalogDescriptionTag)
+		assert.Equal(t, queryCatalogMin+0, schema.QueryCatalogIdTag)
+		assert.Equal(t, queryCatalogMin+1, schema.QueryCatalogOrderTag)
+		assert.Equal(t, queryCatalogMin+2, schema.QueryCatalogNameTag)
+		assert.Equal(t, queryCatalogMin+3, schema.QueryCatalogQueryTag)
+		assert.Equal(t, queryCatalogMin+4, schema.QueryCatalogDescriptionTag)
 	})
 	t.Run("dolt_schemas tags", func(t *testing.T) {
 		doltSchemasMin := sysTableMin + uint64(4007)
-		assert.Equal(t, doltSchemasMin+0, DoltSchemasIdTag)
-		assert.Equal(t, doltSchemasMin+1, DoltSchemasTypeTag)
-		assert.Equal(t, doltSchemasMin+2, DoltSchemasNameTag)
-		assert.Equal(t, doltSchemasMin+3, DoltSchemasFragmentTag)
+		assert.Equal(t, doltSchemasMin+0, schema.DoltSchemasIdTag)
+		assert.Equal(t, doltSchemasMin+1, schema.DoltSchemasTypeTag)
+		assert.Equal(t, doltSchemasMin+2, schema.DoltSchemasNameTag)
+		assert.Equal(t, doltSchemasMin+3, schema.DoltSchemasFragmentTag)
 	})
 }
 
@@ -290,7 +290,7 @@ func TestLDNoms(t *testing.T) {
 
 		tSchema := createTestSchema(t)
 		rowData, _ := createTestRowData(t, ddb.db, tSchema)
-		tbl, err = createTestTable(ddb.db, tSchema, rowData)
+		tbl, err = CreateTestTable(ddb.db, tSchema, rowData)
 
 		if err != nil {
 			t.Fatal("Failed to create test table with data")
@@ -308,12 +308,12 @@ func TestLDNoms(t *testing.T) {
 		ddb, _ := LoadDoltDB(context.Background(), types.Format_7_18, LocalDirDoltDB)
 		meta, err := NewCommitMeta(committerName, committerEmail, "Sample data")
 		if err != nil {
-			t.Error("Failled to commit")
+			t.Error("Failed to commit")
 		}
 
 		commit, err := ddb.Commit(context.Background(), valHash, ref.NewBranchRef("master"), meta)
 		if err != nil {
-			t.Error("Failled to commit")
+			t.Error("Failed to commit")
 		}
 
 		numParents, err := commit.NumParents()

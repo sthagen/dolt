@@ -40,6 +40,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dfunctions"
 	"github.com/dolthub/dolt/go/libraries/utils/argparser"
 	"github.com/dolthub/dolt/go/libraries/utils/filesys"
+	"github.com/dolthub/dolt/go/libraries/utils/tracing"
 	"github.com/dolthub/dolt/go/store/hash"
 )
 
@@ -176,10 +177,7 @@ func processFilterQuery(ctx context.Context, dEnv *env.DoltEnv, cm *doltdb.Commi
 		_, itr, err = eng.query(sqlCtx, query)
 
 	case *sqlparser.Delete:
-		ok := eng.checkThenDeleteAllRows(sqlCtx, s)
-		if !ok {
-			_, itr, err = eng.query(sqlCtx, query)
-		}
+		_, itr, err = eng.query(sqlCtx, query)
 
 	case *sqlparser.DDL:
 		_, err := sqlparser.ParseStrictDDL(query)
@@ -236,10 +234,11 @@ func monoSqlEngine(ctx context.Context, dEnv *env.DoltEnv, cm *doltdb.Commit) (*
 	sqlCtx := sql.NewContext(ctx,
 		sql.WithSession(dsess),
 		sql.WithIndexRegistry(sql.NewIndexRegistry()),
-		sql.WithViewRegistry(sql.NewViewRegistry()))
+		sql.WithViewRegistry(sql.NewViewRegistry()),
+		sql.WithTracer(tracing.Tracer(ctx)))
 	_ = sqlCtx.Set(sqlCtx, sql.AutoCommitSessionVar, sql.Boolean, true)
 
-	db := dsqle.NewDatabase(dbName, dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter())
+	db := dsqle.NewDatabase(dbName, dEnv.DbData())
 
 	cat := sql.NewCatalog()
 	err := cat.Register(dfunctions.DoltFunctions...)

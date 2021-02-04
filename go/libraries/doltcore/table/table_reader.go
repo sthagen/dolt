@@ -16,13 +16,13 @@ package table
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/dolthub/go-mysql-server/sql"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
-	"github.com/dolthub/dolt/go/libraries/doltcore/table/typed/noms"
 	"github.com/dolthub/dolt/go/store/types"
 )
 
@@ -51,7 +51,8 @@ type TableReadCloser interface {
 
 // SqlTableReader is a  TableReader that can read rows as sql.Row.
 type SqlTableReader interface {
-	TableReader
+	// GetSchema gets the schema of the rows that this reader will return
+	GetSchema() schema.Schema
 
 	// ReadRow reads a row from a table as go-mysql-server sql.Row.
 	ReadSqlRow(ctx context.Context) (sql.Row, error)
@@ -59,6 +60,19 @@ type SqlTableReader interface {
 
 // NewTableReader creates a SqlTableReader from |tbl| starting from the first record.
 func NewTableReader(ctx context.Context, tbl *doltdb.Table) (SqlTableReader, error) {
+	sch, err := tbl.GetSchema(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if schema.IsKeyless(sch) {
+		return newKeylessTableReader(ctx, tbl, sch, false)
+	}
+	return newPkTableReader(ctx, tbl, sch, false)
+}
+
+// NewDoltTableReader creates a SqlTableReader from |tbl| starting from the first record.
+func NewDoltTableReader(ctx context.Context, tbl *doltdb.Table) (TableReadCloser, error) {
 	sch, err := tbl.GetSchema(ctx)
 	if err != nil {
 		return nil, err
@@ -86,6 +100,10 @@ func NewBufferedTableReader(ctx context.Context, tbl *doltdb.Table) (SqlTableRea
 // NewBufferedTableReaderForPartition creates a SqlTableReader that reads the rows of |tbl| with indexes
 // in the half-open interval [start, end).
 func NewBufferedTableReaderForPartition(ctx context.Context, tbl *doltdb.Table, start, end uint64) (SqlTableReader, error) {
+	if start > end {
+		return nil, fmt.Errorf("invalid partition table reader, start (%d) > end (%d)", start, end)
+	}
+
 	sch, err := tbl.GetSchema(ctx)
 	if err != nil {
 		return nil, err
@@ -95,20 +113,6 @@ func NewBufferedTableReaderForPartition(ctx context.Context, tbl *doltdb.Table, 
 		return newKeylessTableReaderForPartition(ctx, tbl, sch, start, end)
 	}
 	return newPkTableReaderForPartition(ctx, tbl, sch, start, end)
-}
-
-// NewTableReaderForRanges creates a SqlTableReader that reads the rows of |tbl| corresponding to the
-// the noms.ReadRandes in |ranges|.
-func NewTableReaderForRanges(ctx context.Context, tbl *doltdb.Table, ranges ...*noms.ReadRange) (SqlTableReader, error) {
-	sch, err := tbl.GetSchema(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	if schema.IsKeyless(sch) {
-		return newKeylessTableReaderForRanges(ctx, tbl, sch, ranges...)
-	}
-	return newPkTableReaderForRanges(ctx, tbl, sch, ranges...)
 }
 
 // NewTableReaderFrom creates a SqlTableReader that reads the rows of |tbl| beginning at the record

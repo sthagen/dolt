@@ -154,26 +154,76 @@ func (vs ValueSlice) Contains(nbf *NomsBinFormat, v Value) bool {
 }
 
 type ValueSort struct {
-	values []Value
-	nbf    *NomsBinFormat
+	Values []Value
+	Nbf    *NomsBinFormat
 }
 
-func (vs ValueSort) Len() int      { return len(vs.values) }
-func (vs ValueSort) Swap(i, j int) { vs.values[i], vs.values[j] = vs.values[j], vs.values[i] }
+func (vs ValueSort) Len() int      { return len(vs.Values) }
+func (vs ValueSort) Swap(i, j int) { vs.Values[i], vs.Values[j] = vs.Values[j], vs.Values[i] }
 func (vs ValueSort) Less(i, j int) (bool, error) {
-	return vs.values[i].Less(vs.nbf, vs.values[j])
+	return vs.Values[i].Less(vs.Nbf, vs.Values[j])
 }
 
 func (vs ValueSort) Equals(other ValueSort) bool {
-	return ValueSlice(vs.values).Equals(ValueSlice(other.values))
+	return ValueSlice(vs.Values).Equals(ValueSlice(other.Values))
 }
 
 func (vs ValueSort) Contains(v Value) bool {
-	return ValueSlice(vs.values).Contains(vs.nbf, v)
+	return ValueSlice(vs.Values).Contains(vs.Nbf, v)
 }
 
 type valueReadWriter interface {
 	valueReadWriter() ValueReadWriter
+}
+
+type TupleSlice []Tuple
+
+func (vs TupleSlice) Equals(other TupleSlice) bool {
+	if len(vs) != len(other) {
+		return false
+	}
+
+	for i, v := range vs {
+		if !v.Equals(other[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (vs TupleSlice) Contains(nbf *NomsBinFormat, v Tuple) bool {
+	for _, v := range vs {
+		if v.Equals(v) {
+			return true
+		}
+	}
+	return false
+}
+
+type TupleSort struct {
+	Tuples []Tuple
+	Nbf    *NomsBinFormat
+}
+
+func (vs TupleSort) Len() int {
+	return len(vs.Tuples)
+}
+
+func (vs TupleSort) Swap(i, j int) {
+	vs.Tuples[i], vs.Tuples[j] = vs.Tuples[j], vs.Tuples[i]
+}
+
+func (vs TupleSort) Less(i, j int) (bool, error) {
+	return vs.Tuples[i].TupleLess(vs.Nbf, vs.Tuples[j])
+}
+
+func (vs TupleSort) Equals(other TupleSort) bool {
+	return TupleSlice(vs.Tuples).Equals(other.Tuples)
+}
+
+func (vs TupleSort) Contains(v Tuple) bool {
+	return TupleSlice(vs.Tuples).Contains(vs.Nbf, v)
 }
 
 type valueImpl struct {

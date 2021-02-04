@@ -60,8 +60,8 @@ var testCols = []schema.Column{
 	{Name: titleColName, Tag: titleColTag, Kind: types.StringKind, IsPartOfPK: false, TypeInfo: typeinfo.StringDefaultType, Constraints: nil},
 	{Name: reservedColName, Tag: reservedColTag, Kind: types.StringKind, IsPartOfPK: false, TypeInfo: typeinfo.StringDefaultType, Constraints: nil},
 }
-var testKeyColColl, _ = schema.NewColCollection(testKeyCols...)
-var testNonKeyColColl, _ = schema.NewColCollection(testCols...)
+var testKeyColColl = schema.NewColCollection(testKeyCols...)
+var testNonKeyColColl = schema.NewColCollection(testCols...)
 var sch, _ = schema.SchemaFromPKAndNonPKCols(testKeyColColl, testNonKeyColColl)
 var index schema.Index
 
@@ -399,7 +399,7 @@ func TestReduceToIndex(t *testing.T) {
 		require.NoError(t, err)
 		expectedIndex, err := New(types.Format_7_18, index.Schema(), tvCombo.expectedIndex)
 		require.NoError(t, err)
-		indexRow, err := row.ReduceToIndex(index)
+		indexRow, err := ReduceToIndex(index, row)
 		assert.NoError(t, err)
 		assert.True(t, AreEqual(expectedIndex, indexRow, index.Schema()))
 	}

@@ -19,6 +19,7 @@ teardown() {
     [[ "$output" =~ "dolt_conflicts" ]] || false
     [[ "$output" =~ "dolt_branches" ]] || false
     [[ "$output" =~ "dolt_query_catalog" ]] || false
+    [[ "$output" =~ "dolt_status" ]] || false
     [[ ! "$output" =~ " test" ]] || false  # spaces are impt!
     run dolt ls --all
     [ $status -eq 0 ]
@@ -28,6 +29,7 @@ teardown() {
     [[ "$output" =~ "dolt_conflicts" ]] || false
     [[ "$output" =~ "dolt_branches" ]] || false
     [[ "$output" =~ "dolt_query_catalog" ]] || false
+    [[ "$output" =~ "dolt_status" ]] || false
     [[ "$output" =~ "test" ]] || false
     dolt add test
     dolt commit -m "Added test table"
@@ -277,6 +279,10 @@ teardown() {
 }
 
 @test "query dolt_ancestor_commits" {
+    run dolt sql -q "SELECT count(*) FROM dolt_commit_ancestors;"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "1" ]] || false
+
     run dolt sql -q "SELECT count(*) FROM dolt_commit_ancestors;" -r csv
     [ "$status" -eq 0 ]
     [[ "$output" =~ "1" ]] || false

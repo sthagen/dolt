@@ -255,15 +255,12 @@ func replayCommitWithNewTag(ctx context.Context, root, parentRoot, rebasedParent
 		parentTblName := tblName
 
 		// schema rebase
-		schCC, _ := schema.NewColCollection()
+		schCC := schema.NewColCollection()
 		err = sch.GetAllCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
 			if newTag, found := tableMapping[tag]; found {
 				col.Tag = newTag
 			}
-			schCC, err = schCC.Append(col)
-			if err != nil {
-				return true, err
-			}
+			schCC = schCC.Append(col)
 			return false, nil
 		})
 
@@ -365,7 +362,11 @@ func replayCommitWithNewTag(ctx context.Context, root, parentRoot, rebasedParent
 			return nil, err
 		}
 
-		rebasedTable, err := doltdb.NewTable(ctx, rebasedParentRoot.VRW(), rebasedSchVal, rebasedRows, emptyMap)
+		// migration predates AUTO_INCREMENT support
+		// so we don't need to copy the value here
+		var autoVal types.Value = nil
+
+		rebasedTable, err := doltdb.NewTable(ctx, rebasedParentRoot.VRW(), rebasedSchVal, rebasedRows, emptyMap, autoVal)
 
 		if err != nil {
 			return nil, err
@@ -400,7 +401,7 @@ func replayRowDiffs(ctx context.Context, vrw types.ValueReadWriter, rSch schema.
 
 	nmu := noms.NewNomsMapUpdater(ctx, vrw, rebasedParentRows, rSch, func(stats types.AppliedEditStats) {})
 
-	ad := diff.NewAsyncDiffer(diffBufSize)
+	ad := diff.NewRowDiffer(ctx, rSch, rSch, diffBufSize)
 	// get all differences (including merges) between original commit and its parent
 	ad.Start(ctx, parentRows, rows)
 	defer func() {
@@ -713,23 +714,23 @@ func handleSystemTableMappings(ctx context.Context, tblName string, root *doltdb
 	switch tblName {
 	case doltdb.DocTableName:
 		newTagsByColName = map[string]uint64{
-			doltdb.DocPkColumnName:   doltdb.DocNameTag,
-			doltdb.DocTextColumnName: doltdb.DocTextTag,
+			doltdb.DocPkColumnName:   schema.DocNameTag,
+			doltdb.DocTextColumnName: schema.DocTextTag,
 		}
 	case doltdb.DoltQueryCatalogTableName:
 		newTagsByColName = map[string]uint64{
-			doltdb.QueryCatalogIdCol:          doltdb.QueryCatalogIdTag,
-			doltdb.QueryCatalogOrderCol:       doltdb.QueryCatalogOrderTag,
-			doltdb.QueryCatalogNameCol:        doltdb.QueryCatalogNameTag,
-			doltdb.QueryCatalogQueryCol:       doltdb.QueryCatalogQueryTag,
-			doltdb.QueryCatalogDescriptionCol: doltdb.QueryCatalogDescriptionTag,
+			doltdb.QueryCatalogIdCol:          schema.QueryCatalogIdTag,
+			doltdb.QueryCatalogOrderCol:       schema.QueryCatalogOrderTag,
+			doltdb.QueryCatalogNameCol:        schema.QueryCatalogNameTag,
+			doltdb.QueryCatalogQueryCol:       schema.QueryCatalogQueryTag,
+			doltdb.QueryCatalogDescriptionCol: schema.QueryCatalogDescriptionTag,
 		}
 	case doltdb.SchemasTableName:
 		newTagsByColName = map[string]uint64{
-			doltdb.SchemasTablesIdCol:       doltdb.DoltSchemasIdTag,
-			doltdb.SchemasTablesTypeCol:     doltdb.DoltSchemasTypeTag,
-			doltdb.SchemasTablesNameCol:     doltdb.DoltSchemasNameTag,
-			doltdb.SchemasTablesFragmentCol: doltdb.DoltSchemasFragmentTag,
+			doltdb.SchemasTablesIdCol:       schema.DoltSchemasIdTag,
+			doltdb.SchemasTablesTypeCol:     schema.DoltSchemasTypeTag,
+			doltdb.SchemasTablesNameCol:     schema.DoltSchemasNameTag,
+			doltdb.SchemasTablesFragmentCol: schema.DoltSchemasFragmentTag,
 		}
 	}
 

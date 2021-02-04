@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"sync"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -49,7 +51,17 @@ type IndexEditor struct {
 	flushMutex *sync.RWMutex
 }
 
-const indexEditorMaxEdits = 16384
+var (
+	indexEditorMaxEdits uint64 = 16384
+)
+
+func init() {
+	if maxOpsEnv := os.Getenv("DOLT_EDIT_INDEX_BUFFER_ROWS"); maxOpsEnv != "" {
+		if v, err := strconv.ParseUint(maxOpsEnv, 10, 64); err == nil {
+			indexEditorMaxEdits = v
+		}
+	}
+}
 
 func NewIndexEditor(index schema.Index, indexData types.Map) *IndexEditor {
 	return &IndexEditor{
@@ -147,7 +159,7 @@ func (indexEd *IndexEditor) UpdateIndex(ctx context.Context, originalIndexRow ro
 			return err
 		}
 		if indexEd.idx.IsUnique() {
-			partialKey, err := originalIndexRow.ReduceToIndexPartialKey(indexEd.idx)
+			partialKey, err := row.ReduceToIndexPartialKey(indexEd.idx, originalIndexRow)
 			if err != nil {
 				return err
 			}
@@ -175,7 +187,7 @@ func (indexEd *IndexEditor) UpdateIndex(ctx context.Context, originalIndexRow ro
 			return err
 		}
 		if indexEd.idx.IsUnique() {
-			partialKey, err := updatedIndexRow.ReduceToIndexPartialKey(indexEd.idx)
+			partialKey, err := row.ReduceToIndexPartialKey(indexEd.idx, updatedIndexRow)
 			if err != nil {
 				return err
 			}
@@ -314,7 +326,7 @@ func rebuildIndexRowData(ctx context.Context, vrw types.ValueReadWriter, sch sch
 		if err != nil {
 			return err
 		}
-		indexRow, err := dRow.ReduceToIndex(index)
+		indexRow, err := row.ReduceToIndex(index, dRow)
 		if err != nil {
 			return err
 		}

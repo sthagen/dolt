@@ -23,7 +23,6 @@ import (
 	"github.com/dolthub/go-mysql-server/sql/expression"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
-	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/rowconv"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/sqlutil"
@@ -68,9 +67,9 @@ func NewHistoryTable(ctx *sql.Context, tblName string, ddb *doltdb.DoltDB, root 
 		return nil, err
 	}
 
-	_ = ss.AddColumn(schema.NewColumn(CommitHashCol, doltdb.HistoryCommitHashTag, types.StringKind, false))
-	_ = ss.AddColumn(schema.NewColumn(CommitterCol, doltdb.HistoryCommitterTag, types.StringKind, false))
-	_ = ss.AddColumn(schema.NewColumn(CommitDateCol, doltdb.HistoryCommitDateTag, types.TimestampKind, false))
+	_ = ss.AddColumn(schema.NewColumn(CommitHashCol, schema.HistoryCommitHashTag, types.StringKind, false))
+	_ = ss.AddColumn(schema.NewColumn(CommitterCol, schema.HistoryCommitterTag, types.StringKind, false))
+	_ = ss.AddColumn(schema.NewColumn(CommitDateCol, schema.HistoryCommitDateTag, types.TimestampKind, false))
 
 	sch, err := ss.GenerateSchema()
 
@@ -342,7 +341,9 @@ func newRowItrForTableAtCommit(
 		return nil, err
 	}
 
-	toSuperSchConv, err := rowConvForSchema(ss, tblSch)
+	vrw := types.NewMemoryValueStore() // We're displaying here, so all values that require a VRW will use an internal one
+
+	toSuperSchConv, err := rowConvForSchema(ctx, vrw, ss, tblSch)
 
 	if err != nil {
 		return nil, err
@@ -421,7 +422,7 @@ func (tblItr *rowItrForTableAtCommit) Next() (sql.Row, error) {
 		}
 	}
 
-	return row.DoltRowToSqlRow(r, tblItr.sch)
+	return sqlutil.DoltRowToSqlRow(r, tblItr.sch)
 }
 
 // Close the iterator.

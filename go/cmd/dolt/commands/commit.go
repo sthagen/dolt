@@ -78,7 +78,7 @@ func (cmd CommitCmd) Exec(ctx context.Context, commandStr string, args []string,
 
 	var err error
 	if allFlag {
-		err = actions.StageAllTables(ctx, dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter())
+		err = actions.StageAllTables(ctx, dEnv.DbData())
 	}
 
 	if err != nil {
@@ -112,7 +112,9 @@ func (cmd CommitCmd) Exec(ctx context.Context, commandStr string, args []string,
 		}
 	}
 
-	_, err = actions.CommitStaged(ctx, dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter(), actions.CommitStagedProps{
+	dbData := dEnv.DbData()
+
+	_, err = actions.CommitStaged(ctx, dbData, actions.CommitStagedProps{
 		Message:          msg,
 		Date:             t,
 		AllowEmpty:       apr.Contains(cli.AllowEmptyFlag),
@@ -199,12 +201,12 @@ func buildInitalCommitMsg(ctx context.Context, dEnv *env.DoltEnv) string {
 	currBranch := dEnv.RepoState.CWBHeadRef()
 	stagedTblDiffs, notStagedTblDiffs, _ := diff.GetStagedUnstagedTableDeltas(ctx, dEnv.DoltDB, dEnv.RepoStateReader())
 
-	workingTblsInConflict, _, _, err := merge.GetTablesInConflict(ctx, dEnv)
+	workingTblsInConflict, _, _, err := merge.GetTablesInConflict(ctx, dEnv.DoltDB, dEnv.RepoStateReader())
 	if err != nil {
 		workingTblsInConflict = []string{}
 	}
 
-	stagedDocDiffs, notStagedDocDiffs, _ := diff.GetDocDiffs(ctx, dEnv.DoltDB, dEnv.RepoStateReader())
+	stagedDocDiffs, notStagedDocDiffs, _ := diff.GetDocDiffs(ctx, dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.DocsReadWriter())
 
 	buf := bytes.NewBuffer([]byte{})
 	n := printStagedDiffs(buf, stagedTblDiffs, stagedDocDiffs, true)

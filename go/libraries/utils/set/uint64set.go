@@ -17,14 +17,14 @@ package set
 import "sort"
 
 type Uint64Set struct {
-	uints map[uint64]interface{}
+	uints map[uint64]bool
 }
 
 func NewUint64Set(uints []uint64) *Uint64Set {
-	s := &Uint64Set{make(map[uint64]interface{}, len(uints))}
+	s := &Uint64Set{make(map[uint64]bool, len(uints))}
 
 	for _, b := range uints {
-		s.uints[b] = emptyInstance
+		s.uints[b] = true
 	}
 
 	return s
@@ -46,11 +46,21 @@ func (us *Uint64Set) ContainsAll(uints []uint64) bool {
 }
 
 func (us *Uint64Set) Add(i uint64) {
-	us.uints[i] = emptyInstance
+	us.uints[i] = true
 }
 
 func (us *Uint64Set) Remove(i uint64) {
 	delete(us.uints, i)
+}
+
+func (us *Uint64Set) Intersection(other *Uint64Set) *Uint64Set {
+	inter := &Uint64Set{uints: make(map[uint64]bool)}
+	for member := range us.uints {
+		if other.Contains(member) {
+			inter.Add(member)
+		}
+	}
+	return inter
 }
 
 func (us *Uint64Set) AsSlice() []uint64 {

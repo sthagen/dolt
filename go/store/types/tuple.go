@@ -24,7 +24,11 @@ package types
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
+	"sync"
 
 	"github.com/dolthub/dolt/go/store/d"
 )
@@ -32,23 +36,6 @@ import (
 var _ LesserValuable = TupleValueSlice(nil)
 
 type TupleValueSlice []Value
-
-func (tvs TupleValueSlice) Iter(cb func(tag uint64, val Value) (stop bool, err error)) error {
-	l := len(tvs)
-	for i := 0; i < l; i += 2 {
-		stop, err := cb(uint64(tvs[i].(Uint)), tvs[i+1])
-
-		if err != nil {
-			return err
-		}
-
-		if stop {
-			break
-		}
-	}
-
-	return nil
-}
 
 func (tvs TupleValueSlice) Kind() NomsKind {
 	return TupleKind
@@ -112,8 +99,24 @@ func EmptyTuple(nbf *NomsBinFormat) Tuple {
 	return t
 }
 
+func newTupleIterator() interface{} {
+	return &TupleIterator{}
+}
+
+type tupleItrPair struct {
+	thisItr  *TupleIterator
+	otherItr *TupleIterator
+}
+
+func newTupleIteratorPair() interface{} {
+	return &tupleItrPair{&TupleIterator{}, &TupleIterator{}}
+}
+
+var TupleItrPool = &sync.Pool{New: newTupleIterator}
+var tupItrPairPool = &sync.Pool{New: newTupleIteratorPair}
+
 type TupleIterator struct {
-	dec   valueDecoder
+	dec   *valueDecoder
 	count uint64
 	pos   uint64
 	nbf   *NomsBinFormat
@@ -135,6 +138,42 @@ func (itr *TupleIterator) Next() (uint64, Value, error) {
 	return itr.count, nil, nil
 }
 
+func (itr *TupleIterator) NextUint64() (uint64, uint64, error) {
+	if itr.pos < itr.count {
+		k := itr.dec.ReadKind()
+
+		if k != UintKind {
+			return 0, 0, errors.New("NextUint64 called when the next value is not a Uint64")
+		}
+
+		valPos := itr.pos
+		val := itr.dec.ReadUint()
+		itr.pos++
+
+		return valPos, val, nil
+	}
+
+	return itr.count, 0, io.EOF
+}
+
+func (itr *TupleIterator) CodecReader() (CodecReader, uint64) {
+	return itr.dec, itr.count - itr.pos
+}
+
+func (itr *TupleIterator) Skip() error {
+	if itr.pos < itr.count {
+		err := itr.dec.SkipValue(itr.nbf)
+
+		if err != nil {
+			return err
+		}
+
+		itr.pos++
+	}
+
+	return nil
+}
+
 func (itr *TupleIterator) HasMore() bool {
 	return itr.pos < itr.count
 }
@@ -147,6 +186,37 @@ func (itr *TupleIterator) Pos() uint64 {
 	return itr.pos
 }
 
+func (itr *TupleIterator) InitForTuple(t Tuple) error {
+	return itr.InitForTupleAt(t, 0)
+}
+
+func (itr *TupleIterator) InitForTupleAt(t Tuple, pos uint64) error {
+	if itr.dec == nil {
+		dec := t.decoder()
+		itr.dec = &dec
+	} else {
+		itr.dec.buff = t.buff
+		itr.dec.offset = 0
+		itr.dec.vrw = t.vrw
+	}
+
+	itr.dec.skipKind()
+	count := itr.dec.readCount()
+
+	for i := uint64(0); i < pos; i++ {
+		err := itr.dec.SkipValue(t.format())
+
+		if err != nil {
+			return err
+		}
+	}
+
+	itr.count = count
+	itr.pos = pos
+	itr.nbf = t.format()
+	return nil
+}
+
 type Tuple struct {
 	valueImpl
 }
@@ -154,11 +224,23 @@ type Tuple struct {
 // readTuple reads the data provided by a decoder and moves the decoder forward.
 func readTuple(nbf *NomsBinFormat, dec *valueDecoder) (Tuple, error) {
 	start := dec.pos()
+	k := dec.PeekKind()
+
+	if k == NullKind {
+		dec.skipKind()
+		return EmptyTuple(nbf), nil
+	}
+
+	if k != TupleKind {
+		return Tuple{}, errors.New("current value is not a tuple")
+	}
+
 	err := skipTuple(nbf, dec)
 
 	if err != nil {
-		return EmptyTuple(nbf), err
+		return Tuple{}, err
 	}
+
 	end := dec.pos()
 	return Tuple{valueImpl{dec.vrw, nbf, dec.byteSlice(start, end), nil}}, nil
 }
@@ -167,7 +249,7 @@ func skipTuple(nbf *NomsBinFormat, dec *valueDecoder) error {
 	dec.skipKind()
 	count := dec.readCount()
 	for i := uint64(0); i < count; i++ {
-		err := dec.skipValue(nbf)
+		err := dec.SkipValue(nbf)
 
 		if err != nil {
 			return err
@@ -274,6 +356,10 @@ func (t Tuple) PrefixEquals(ctx context.Context, other Tuple, prefixCount uint64
 	return true, nil
 }
 
+func (t Tuple) Compare(other Tuple) int {
+	return bytes.Compare(t.buff, other.buff)
+}
+
 func (t Tuple) typeOf() (*Type, error) {
 	dec, count := t.decoderSkipToFields()
 	ts := make(typeSlice, 0, count)
@@ -342,17 +428,14 @@ func (t Tuple) Iterator() (*TupleIterator, error) {
 }
 
 func (t Tuple) IteratorAt(pos uint64) (*TupleIterator, error) {
-	dec, count := t.decoderSkipToFields()
+	itr := &TupleIterator{}
+	err := itr.InitForTupleAt(t, pos)
 
-	for i := uint64(0); i < pos; i++ {
-		err := dec.skipValue(t.format())
-
-		if err != nil {
-			return nil, err
-		}
+	if err != nil {
+		return nil, err
 	}
 
-	return &TupleIterator{dec, count, pos, t.format()}, nil
+	return itr, nil
 }
 
 func (t Tuple) AsSlice() (TupleValueSlice, error) {
@@ -374,7 +457,10 @@ func (t Tuple) AsSlice() (TupleValueSlice, error) {
 
 // IterFields iterates over the fields, calling cb for every field in the tuple until cb returns false
 func (t Tuple) IterFields(cb func(index uint64, value Value) (stop bool, err error)) error {
-	itr, err := t.Iterator()
+	itr := TupleItrPool.Get().(*TupleIterator)
+	defer TupleItrPool.Put(itr)
+
+	err := itr.InitForTuple(t)
 
 	if err != nil {
 		return err
@@ -410,7 +496,7 @@ func (t Tuple) Get(n uint64) (Value, error) {
 	}
 
 	for i := uint64(0); i < n; i++ {
-		err := dec.skipValue(t.format())
+		err := dec.SkipValue(t.format())
 
 		if err != nil {
 			return nil, err
@@ -484,7 +570,7 @@ func (t Tuple) splitFieldsAt(n uint64) (prolog, head, tail []byte, count uint64,
 	fieldsOffset := dec.offset
 
 	for i := uint64(0); i < n; i++ {
-		err := dec.skipValue(t.format())
+		err := dec.SkipValue(t.format())
 
 		if err != nil {
 			return nil, nil, nil, 0, false, err
@@ -494,7 +580,7 @@ func (t Tuple) splitFieldsAt(n uint64) (prolog, head, tail []byte, count uint64,
 	head = dec.buff[fieldsOffset:dec.offset]
 
 	if n != count-1 {
-		err := dec.skipValue(t.format())
+		err := dec.SkipValue(t.format())
 
 		if err != nil {
 			return nil, nil, nil, 0, false, err
@@ -506,47 +592,162 @@ func (t Tuple) splitFieldsAt(n uint64) (prolog, head, tail []byte, count uint64,
 	return
 }
 
-func (t Tuple) Less(nbf *NomsBinFormat, other LesserValuable) (bool, error) {
-	if otherTuple, ok := other.(Tuple); ok {
-		itr, err := t.Iterator()
+func (t Tuple) TupleLess(nbf *NomsBinFormat, otherTuple Tuple) (bool, error) {
+	itrs := tupItrPairPool.Get().(*tupleItrPair)
+	defer tupItrPairPool.Put(itrs)
 
-		if err != nil {
-			return false, err
-		}
+	itr := itrs.thisItr
+	err := itr.InitForTuple(t)
 
-		otherItr, err := otherTuple.Iterator()
-
-		if err != nil {
-			return false, err
-		}
-
-		for itr.HasMore() {
-			if !otherItr.HasMore() {
-				// equal up til the end of other. other is shorter, therefore it is less
-				return false, nil
-			}
-
-			_, currVal, err := itr.Next()
-
-			if err != nil {
-				return false, err
-			}
-
-			_, currOthVal, err := otherItr.Next()
-
-			if err != nil {
-				return false, err
-			}
-
-			if !currVal.Equals(currOthVal) {
-				return currVal.Less(nbf, currOthVal)
-			}
-		}
-
-		return itr.Len() < otherItr.Len(), nil
+	if err != nil {
+		return false, err
 	}
 
-	return TupleKind < other.Kind(), nil
+	otherItr := itrs.otherItr
+	err = otherItr.InitForTuple(otherTuple)
+
+	if err != nil {
+		return false, err
+	}
+
+	smallerCount := itr.count
+	if otherItr.count < smallerCount {
+		smallerCount = otherItr.count
+	}
+
+	dec := itr.dec
+	otherDec := otherItr.dec
+	for i := uint64(0); i < smallerCount; i++ {
+		kind := dec.ReadKind()
+		otherKind := otherDec.ReadKind()
+
+		if kind != otherKind {
+			return kind < otherKind, nil
+		}
+
+		var res int
+		switch kind {
+		case NullKind:
+			continue
+
+		case BoolKind:
+			res = int(dec.buff[dec.offset]) - int(otherDec.buff[otherDec.offset])
+			dec.offset += 1
+			otherDec.offset += 1
+
+		case StringKind, InlineBlobKind:
+			size, otherSize := uint32(dec.readCount()), uint32(otherDec.readCount())
+			start, otherStart := dec.offset, otherDec.offset
+			dec.offset += size
+			otherDec.offset += otherSize
+			res = bytes.Compare(dec.buff[start:dec.offset], otherDec.buff[otherStart:otherDec.offset])
+
+		case UUIDKind:
+			start, otherStart := dec.offset, otherDec.offset
+			dec.offset += uuidNumBytes
+			otherDec.offset += uuidNumBytes
+			res = bytes.Compare(dec.buff[start:dec.offset], otherDec.buff[otherStart:otherDec.offset])
+
+		case IntKind:
+			n := dec.ReadInt()
+			otherN := otherDec.ReadInt()
+
+			if n == otherN {
+				continue
+			} else {
+				return n < otherN, nil
+			}
+
+		case UintKind:
+			n := dec.ReadUint()
+			otherN := otherDec.ReadUint()
+
+			if n == otherN {
+				continue
+			} else {
+				return n < otherN, nil
+			}
+
+		case DecimalKind:
+			d, err := dec.ReadDecimal()
+
+			if err != nil {
+				return false, err
+			}
+
+			otherD, err := otherDec.ReadDecimal()
+
+			if err != nil {
+				return false, err
+			}
+
+			res = d.Cmp(otherD)
+
+		case FloatKind:
+			f := dec.ReadFloat(nbf)
+			otherF := otherDec.ReadFloat(nbf)
+			res = int(f - otherF)
+
+			if f == otherF {
+				continue
+			} else {
+				return f < otherF, nil
+			}
+
+		case TimestampKind:
+			tm, err := dec.ReadTimestamp()
+
+			if err != nil {
+				return false, err
+			}
+
+			otherTm, err := otherDec.ReadTimestamp()
+
+			if err != nil {
+				return false, err
+			}
+
+			if tm.Equal(otherTm) {
+				continue
+			} else {
+				return tm.Before(otherTm), nil
+			}
+
+		default:
+			v, err := dec.readValue(nbf)
+
+			if err != nil {
+				return false, err
+			}
+
+			otherV, err := otherDec.readValue(nbf)
+
+			if err != nil {
+				return false, err
+			}
+
+			if v.Equals(otherV) {
+				continue
+			} else {
+				return v.Less(nbf, otherV)
+			}
+		}
+
+		if res != 0 {
+			return res < 0, nil
+		}
+	}
+
+	return itr.Len() < otherItr.Len(), nil
+}
+
+func (t Tuple) Less(nbf *NomsBinFormat, other LesserValuable) (bool, error) {
+	otherTuple, ok := other.(Tuple)
+	if !ok {
+		return TupleKind < other.Kind(), nil
+	}
+
+	return t.TupleLess(nbf, otherTuple)
 }
 
 func (t Tuple) StartsWith(otherTuple Tuple) bool {
@@ -556,10 +757,14 @@ func (t Tuple) StartsWith(otherTuple Tuple) bool {
 }
 
 func (t Tuple) Contains(v Value) (bool, error) {
-	itr, err := t.Iterator()
+	itr := TupleItrPool.Get().(*TupleIterator)
+	defer TupleItrPool.Put(itr)
+
+	err := itr.InitForTuple(t)
 	if err != nil {
 		return false, err
 	}
+
 	for itr.HasMore() {
 		_, tupleVal, err := itr.Next()
 		if err != nil {
@@ -581,9 +786,41 @@ func (t Tuple) skip(nbf *NomsBinFormat, b *binaryNomsReader) {
 }
 
 func (t Tuple) String() string {
-	panic("unreachable")
+	b := strings.Builder{}
+
+	iter := TupleItrPool.Get().(*TupleIterator)
+	defer TupleItrPool.Put(iter)
+
+	err := iter.InitForTuple(t)
+	if err != nil {
+		b.WriteString(err.Error())
+		return b.String()
+	}
+
+	b.WriteString("Tuple(")
+
+	seenOne := false
+	for {
+		_, v, err := iter.Next()
+		if v == nil {
+			break
+		}
+		if err != nil {
+			b.WriteString(err.Error())
+			return b.String()
+		}
+
+		if seenOne {
+			b.WriteString(", ")
+		}
+		seenOne = true
+
+		b.WriteString(v.HumanReadableString())
+	}
+	b.WriteString(")")
+	return b.String()
 }
 
 func (t Tuple) HumanReadableString() string {
-	panic("unreachable")
+	return t.String()
 }

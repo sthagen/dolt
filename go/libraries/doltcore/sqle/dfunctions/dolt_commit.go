@@ -18,13 +18,18 @@ import (
 	"fmt"
 
 	"github.com/dolthub/go-mysql-server/sql"
+	"github.com/dolthub/vitess/go/vt/proto/query"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
 )
 
 const DoltCommitFuncName = "dolt_commit"
+
+var hashType = sql.MustCreateString(query.Type_TEXT, 32, sql.Collation_ascii_bin)
 
 type DoltCommitFunc struct {
 	children []sql.Expression
@@ -40,53 +45,46 @@ func (d DoltCommitFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error)
 	// Get the information for the sql context.
 	dbName := ctx.GetCurrentDatabase()
 	dSess := sqle.DSessFromSess(ctx.Session)
-
-	ddb, ok := dSess.GetDoltDB(dbName)
+	dbData, ok := dSess.GetDbData(dbName)
 
 	if !ok {
 		return nil, fmt.Errorf("Could not load %s", dbName)
 	}
 
-	rsr, ok := dSess.GetDoltDBRepoStateReader(dbName)
-
-	if !ok {
-		return nil, fmt.Errorf("Could not load the %s RepoStateReader", dbName)
-	}
-
-	rsw, ok := dSess.GetDoltDBRepoStateWriter(dbName)
-
-	if !ok {
-		return nil, fmt.Errorf("Could not load the %s RepoStateWriter", dbName)
-	}
+	ddb := dbData.Ddb
+	rsr := dbData.Rsr
 
 	ap := cli.CreateCommitArgParser()
 
 	// Get the args for DOLT_COMMIT.
-	args := make([]string, len(d.children))
-	for i := range d.children {
-		childVal, err := d.children[i].Eval(ctx, row)
+	args, err := getDoltArgs(ctx, row, d.Children())
 
-		if err != nil {
-			return nil, err
-		}
-
-		text, err := sql.Text.Convert(childVal)
-
-		if err != nil {
-			return nil, err
-		}
-
-		args[i] = text.(string)
+	if err != nil {
+		return nil, err
 	}
 
 	apr := cli.ParseArgs(ap, args, nil)
 
-	// Check if the -all param is provided. Stage all tables if so.
 	allFlag := apr.Contains(cli.AllFlag)
+	allowEmpty := apr.Contains(cli.AllowEmptyFlag)
 
-	var err error
+	// Check if there are no changes in the working set but the -a flag is true
+	if allFlag && !hasWorkingSetChanges(rsr) && !allowEmpty {
+		return nil, fmt.Errorf("Cannot commit an empty commit. See the --allow-empty if you want to.")
+	}
+
+	// Check if there are no changes in the staged set but the -a flag is false
+	hasStagedChanges, err := hasStagedSetChanges(ctx, ddb, rsr)
+	if err != nil {
+		return nil, err
+	}
+
+	if !allFlag && !hasStagedChanges && !allowEmpty {
+		return nil, fmt.Errorf("Cannot commit an empty commit. See the --allow-empty if you want to.")
+	}
+
 	if allFlag {
-		err = actions.StageAllTables(ctx, ddb, rsr, rsw)
+		err = actions.StageAllTables(ctx, dbData)
 	}
 
 	if err != nil {
@@ -122,7 +120,7 @@ func (d DoltCommitFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error)
 		}
 	}
 
-	h, err := actions.CommitStaged(ctx, ddb, rsr, rsw, actions.CommitStagedProps{
+	h, err := actions.CommitStaged(ctx, dbData, actions.CommitStagedProps{
 		Message:          msg,
 		Date:             t,
 		AllowEmpty:       apr.Contains(cli.AllowEmptyFlag),
@@ -131,7 +129,59 @@ func (d DoltCommitFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error)
 		Email:            email,
 	})
 
-	return h, err
+	if allFlag {
+		err = setHeadAndWorkingSessionRoot(ctx, h)
+	} else {
+		err = setSessionRootExplicit(ctx, h, sqle.HeadKeySuffix)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return h, nil
+}
+
+func hasWorkingSetChanges(rsr env.RepoStateReader) bool {
+	return rsr.WorkingHash() != rsr.StagedHash()
+}
+
+// TODO: We should not be dealing with root objects here but commit specs.
+func hasStagedSetChanges(ctx *sql.Context, ddb *doltdb.DoltDB, rsr env.RepoStateReader) (bool, error) {
+	root, err := env.HeadRoot(ctx, ddb, rsr)
+
+	if err != nil {
+		return false, err
+	}
+
+	headHash, err := root.HashOf()
+
+	if err != nil {
+		return false, err
+	}
+
+	return rsr.StagedHash() != headHash, nil
+}
+
+func getDoltArgs(ctx *sql.Context, row sql.Row, children []sql.Expression) ([]string, error) {
+	args := make([]string, len(children))
+	for i := range children {
+		childVal, err := children[i].Eval(ctx, row)
+
+		if err != nil {
+			return nil, err
+		}
+
+		text, err := sql.Text.Convert(childVal)
+
+		if err != nil {
+			return nil, err
+		}
+
+		args[i] = text.(string)
+	}
+
+	return args, nil
 }
 
 func (d DoltCommitFunc) String() string {
@@ -166,4 +216,21 @@ func (d DoltCommitFunc) Resolved() bool {
 
 func (d DoltCommitFunc) Children() []sql.Expression {
 	return d.children
+}
+
+// setHeadAndWorkingSessionRoot takes in a ctx and the new head hashstring and updates the session head and working hashes.
+func setHeadAndWorkingSessionRoot(ctx *sql.Context, headHashStr string) error {
+	key := ctx.GetCurrentDatabase() + sqle.HeadKeySuffix
+	dsess := sqle.DSessFromSess(ctx.Session)
+
+	return dsess.Set(ctx, key, hashType, headHashStr)
+}
+
+// setSessionRootExplicit sets a session variable (either HEAD or WORKING) to a hash string. For HEAD, the hash string
+// should come from the commit string. For working the commit string needs to come from the root.
+func setSessionRootExplicit(ctx *sql.Context, hashString string, suffix string) error {
+	key := ctx.GetCurrentDatabase() + suffix
+	dsess := sqle.DSessFromSess(ctx.Session)
+
+	return dsess.SetSessionVarDirectly(ctx, key, hashType, hashString)
 }

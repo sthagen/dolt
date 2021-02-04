@@ -310,6 +310,17 @@ func (m Map) MaybeGet(ctx context.Context, key Value) (v Value, ok bool, err err
 	return entry.value, true, nil
 }
 
+func (m Map) MaybeGetTuple(ctx context.Context, key Tuple) (v Tuple, ok bool, err error) {
+	var val Value
+	val, ok, err = m.MaybeGet(ctx, key)
+
+	if val != nil {
+		return val.(Tuple), ok, err
+	}
+
+	return Tuple{}, ok, err
+}
+
 func (m Map) Has(ctx context.Context, key Value) (bool, error) {
 	cur, err := newCursorAtValue(ctx, m.orderedSequence, key, false, false)
 
@@ -419,7 +430,33 @@ type mapIterAllCallback func(key, value Value) error
 
 func (m Map) IterAll(ctx context.Context, cb mapIterAllCallback) error {
 	var k Value
-	err := iterAll(ctx, m, func(v Value, idx uint64) error {
+	err := iterAll(ctx, m, func(v Value, _ uint64) error {
+		if k != nil {
+			err := cb(k, v)
+
+			if err != nil {
+				return err
+			}
+
+			k = nil
+		} else {
+			k = v
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	d.PanicIfFalse(k == nil)
+	return nil
+}
+
+func (m Map) IterRange(ctx context.Context, startIdx, endIdx uint64, cb mapIterAllCallback) error {
+	var k Value
+	_, err := iterRange(ctx, m, startIdx, endIdx, func(v Value) error {
 		if k != nil {
 			err := cb(k, v)
 

@@ -76,21 +76,21 @@ func (cmd StatusCmd) Exec(ctx context.Context, commandStr string, args []string,
 		cli.PrintErrln(toStatusVErr(err).Verbose())
 		return 1
 	}
-	workingTblsInConflict, _, _, err := merge.GetTablesInConflict(ctx, dEnv)
+	workingTblsInConflict, _, _, err := merge.GetTablesInConflict(ctx, dEnv.DoltDB, dEnv.RepoStateReader())
 
 	if err != nil {
 		cli.PrintErrln(toStatusVErr(err).Verbose())
 		return 1
 	}
 
-	stagedDocDiffs, notStagedDocDiffs, err := diff.GetDocDiffs(ctx, dEnv.DoltDB, dEnv.RepoStateReader())
+	stagedDocDiffs, notStagedDocDiffs, err := diff.GetDocDiffs(ctx, dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.DocsReadWriter())
 
 	if err != nil {
 		cli.PrintErrln(toStatusVErr(err).Verbose())
 		return 1
 	}
 
-	workingDocsInConflict, err := merge.GetDocsInConflict(ctx, dEnv)
+	workingDocsInConflict, err := merge.GetDocsInConflict(ctx, dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.DocsReadWriter())
 
 	if err != nil {
 		cli.PrintErrln(toStatusVErr(err).Verbose())
@@ -185,6 +185,7 @@ func printStagedDiffs(wr io.Writer, stagedTbls []diff.TableDelta, stagedDocs *di
 		}
 
 		iohelp.WriteLine(wr, color.GreenString(strings.Join(lines, "\n")))
+		return len(stagedTbls) + stagedDocs.Len()
 	}
 
 	return 0

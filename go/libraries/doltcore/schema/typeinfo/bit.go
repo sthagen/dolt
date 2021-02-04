@@ -15,6 +15,7 @@
 package typeinfo
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 
@@ -64,8 +65,22 @@ func (ti *bitType) ConvertNomsValueToValue(v types.Value) (interface{}, error) {
 	return nil, fmt.Errorf(`"%v" cannot convert NomsKind "%v" to a value`, ti.String(), v.Kind())
 }
 
+// ReadFrom reads a go value from a noms types.CodecReader directly
+func (ti *bitType) ReadFrom(_ *types.NomsBinFormat, reader types.CodecReader) (interface{}, error) {
+	k := reader.ReadKind()
+	switch k {
+	case types.UintKind:
+		val := reader.ReadUint()
+		return val, nil
+	case types.NullKind:
+		return nil, nil
+	}
+
+	return nil, fmt.Errorf(`"%v" cannot convert NomsKind "%v" to a value`, ti.String(), k)
+}
+
 // ConvertValueToNomsValue implements TypeInfo interface.
-func (ti *bitType) ConvertValueToNomsValue(v interface{}) (types.Value, error) {
+func (ti *bitType) ConvertValueToNomsValue(ctx context.Context, vrw types.ValueReadWriter, v interface{}) (types.Value, error) {
 	if v == nil {
 		return types.NullValue, nil
 	}
@@ -141,7 +156,7 @@ func (ti *bitType) NomsKind() types.NomsKind {
 }
 
 // ParseValue implements TypeInfo interface.
-func (ti *bitType) ParseValue(str *string) (types.Value, error) {
+func (ti *bitType) ParseValue(ctx context.Context, vrw types.ValueReadWriter, str *string) (types.Value, error) {
 	if str == nil || *str == "" {
 		return types.NullValue, nil
 	}

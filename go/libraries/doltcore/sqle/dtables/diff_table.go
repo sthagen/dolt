@@ -77,8 +77,8 @@ func NewDiffTable(ctx *sql.Context, tblName string, ddb *doltdb.DoltDB, root *do
 		return nil, err
 	}
 
-	_ = ss.AddColumn(schema.NewColumn("commit", doltdb.DiffCommitTag, types.StringKind, false))
-	_ = ss.AddColumn(schema.NewColumn("commit_date", doltdb.DiffCommitDateTag, types.TimestampKind, false))
+	_ = ss.AddColumn(schema.NewColumn("commit", schema.DiffCommitTag, types.StringKind, false))
+	_ = ss.AddColumn(schema.NewColumn("commit_date", schema.DiffCommitDateTag, types.TimestampKind, false))
 
 	sch, err := ss.GenerateSchema()
 
@@ -219,7 +219,7 @@ func tableData(ctx *sql.Context, tbl *doltdb.Table, ddb *doltdb.DoltDB) (types.M
 var _ sql.RowIter = (*diffRowItr)(nil)
 
 type diffRowItr struct {
-	ad             *diff.AsyncDiffer
+	ad             diff.RowDiffer
 	diffSrc        *diff.RowDiffSource
 	joiner         *rowconv.Joiner
 	sch            schema.Schema
@@ -232,16 +232,6 @@ type commitInfo struct {
 	date    *types.Timestamp
 	nameTag uint64
 	dateTag uint64
-}
-
-func newDiffRowItr(ctx context.Context, joiner *rowconv.Joiner, rowDataFrom, rowDataTo types.Map, convFrom, convTo *rowconv.RowConverter, from, to commitInfo) *diffRowItr {
-	ad := diff.NewAsyncDiffer(1024)
-	ad.Start(ctx, rowDataFrom, rowDataTo)
-
-	src := diff.NewRowDiffSource(ad, joiner)
-	src.AddInputRowConversion(convFrom, convTo)
-
-	return &diffRowItr{ad, src, joiner, joiner.GetSchema(), from, to}
 }
 
 // Next returns the next row
@@ -284,7 +274,7 @@ func (itr *diffRowItr) Next() (sql.Row, error) {
 		}
 	}
 
-	sqlRow, err := row.DoltRowToSqlRow(r, itr.sch)
+	sqlRow, err := sqlutil.DoltRowToSqlRow(r, itr.sch)
 
 	if err != nil {
 		return nil, err
@@ -349,13 +339,15 @@ func (dp diffPartition) getRowIter(ctx *sql.Context, ddb *doltdb.DoltDB, ss *sch
 		return nil, err
 	}
 
-	fromConv, err := rowConvForSchema(ss, fromSch)
+	vrw := types.NewMemoryValueStore() // We're displaying here, so all values that require a VRW will use an internal one
+
+	fromConv, err := rowConvForSchema(ctx, vrw, ss, fromSch)
 
 	if err != nil {
 		return nil, err
 	}
 
-	toConv, err := rowConvForSchema(ss, toSch)
+	toConv, err := rowConvForSchema(ctx, vrw, ss, toSch)
 
 	if err != nil {
 		return nil, err
@@ -370,16 +362,20 @@ func (dp diffPartition) getRowIter(ctx *sql.Context, ddb *doltdb.DoltDB, ss *sch
 	fromCmInfo := commitInfo{types.String(dp.fromName), dp.fromDate, fromCol.Tag, fromDateCol.Tag}
 	toCmInfo := commitInfo{types.String(dp.toName), dp.toDate, toCol.Tag, toDateCol.Tag}
 
-	return newDiffRowItr(
-		ctx,
-		joiner,
-		fromData,
-		toData,
-		fromConv,
-		toConv,
-		fromCmInfo,
-		toCmInfo,
-	), nil
+	rd := diff.NewRowDiffer(ctx, fromSch, toSch, 1024)
+	rd.Start(ctx, fromData, toData)
+
+	src := diff.NewRowDiffSource(rd, joiner)
+	src.AddInputRowConversion(fromConv, toConv)
+
+	return &diffRowItr{
+		ad:             rd,
+		diffSrc:        src,
+		joiner:         joiner,
+		sch:            joiner.GetSchema(),
+		fromCommitInfo: fromCmInfo,
+		toCommitInfo:   toCmInfo,
+	}, nil
 }
 
 type partitionSelectFunc func(*sql.Context, diffPartition) (bool, error)
@@ -392,16 +388,12 @@ func selectFuncForFilters(nbf *types.NomsBinFormat, filters []sql.Expression) (p
 		fromCommitDateTag
 	)
 
-	colColl, err := schema.NewColCollection(
+	colColl := schema.NewColCollection(
 		schema.NewColumn(toCommit, toCommitTag, types.StringKind, false),
 		schema.NewColumn(fromCommit, fromCommitTag, types.StringKind, false),
 		schema.NewColumn(toCommitDate, toCommitDateTag, types.TimestampKind, false),
 		schema.NewColumn(fromCommitDate, fromCommitDateTag, types.TimestampKind, false),
 	)
-
-	if err != nil {
-		return nil, err
-	}
 
 	expFunc, err := expreval.ExpressionFuncFromSQLExpressions(nbf, schema.UnkeyedSchemaFromCols(colColl), filters)
 
@@ -564,7 +556,7 @@ func (dp *diffPartitions) Close() error {
 }
 
 // creates a RowConverter for transforming rows with the the given schema to this super schema.
-func rowConvForSchema(ss *schema.SuperSchema, sch schema.Schema) (*rowconv.RowConverter, error) {
+func rowConvForSchema(ctx context.Context, vrw types.ValueReadWriter, ss *schema.SuperSchema, sch schema.Schema) (*rowconv.RowConverter, error) {
 	eq, err := schema.SchemasAreEqual(sch, schema.EmptySchema)
 	if err != nil {
 		return nil, err
@@ -591,5 +583,5 @@ func rowConvForSchema(ss *schema.SuperSchema, sch schema.Schema) (*rowconv.RowCo
 		return nil, err
 	}
 
-	return rowconv.NewRowConverter(fm)
+	return rowconv.NewRowConverter(ctx, vrw, fm)
 }

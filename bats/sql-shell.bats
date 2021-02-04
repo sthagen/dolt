@@ -27,6 +27,20 @@ teardown() {
     [[ "$output" =~ "pk" ]] || false
 }
 
+@test "sql shell writes to disk after every iteration (autocommit)" {
+    skiponwindows "Need to install expect and make this script work on windows."
+    run $BATS_TEST_DIRNAME/sql-shell.expect
+    echo "$output"
+
+    # 2 tables are created. 1 from above and 1 in the expect file.
+    [[ "$output" =~ "+-------------+" ]] || false
+    [[ "$output" =~ "| Table       |" ]] || false
+    [[ "$output" =~ "+-------------+" ]] || false
+    [[ "$output" =~ "| test        |" ]] || false
+    [[ "$output" =~ "| test_expect |" ]] || false
+    [[ "$output" =~ "+-------------+" ]] || false
+}
+
 @test "bad sql in sql shell should error" {
     run dolt sql <<< "This is bad sql"
     [ $status -eq 1 ]
@@ -39,4 +53,27 @@ teardown() {
     run dolt sql "SELECT * FROM test;"
     [ $status -eq 1 ]
     [[ "$output" =~ "Invalid Argument:" ]] || false
+}
+
+@test "validate string formatting" {
+      dolt sql <<SQL
+CREATE TABLE test2 (
+  str varchar(256) NOT NULL,
+  PRIMARY KEY (str)
+);
+SQL
+  TESTSTR='0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ`~!@#$%^&*()){}[]/=?+|,.<>;:_-_%d%s%f'
+  dolt sql -q "INSERT INTO test2 (str) VALUES ('$TESTSTR')"
+
+  run dolt sql -q "SELECT * FROM test2"
+  [ $status -eq 0 ]
+  [[ "$output" =~ "$TESTSTR" ]] || false
+
+  run dolt sql -q "SELECT * FROM test2" -r csv
+  [ $status -eq 0 ]
+  [[ "$output" =~ "$TESTSTR" ]] || false
+
+  run dolt sql -q "SELECT * FROM test2" -r json
+  [ $status -eq 0 ]
+  [[ "$output" =~ "$TESTSTR" ]] || false
 }

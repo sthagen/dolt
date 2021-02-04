@@ -16,7 +16,6 @@ package table
 
 import (
 	"context"
-	"fmt"
 	"io"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -34,7 +33,7 @@ type pkTableReader struct {
 }
 
 var _ SqlTableReader = pkTableReader{}
-var _ SqlTableReader = &noms.NomsRangeReader{}
+var _ TableReadCloser = pkTableReader{}
 
 // GetSchema implements the TableReader interface.
 func (rdr pkTableReader) GetSchema() schema.Schema {
@@ -64,13 +63,18 @@ func (rdr pkTableReader) ReadSqlRow(ctx context.Context) (sql.Row, error) {
 		return nil, io.EOF
 	}
 
-	return row.SqlRowFromTuples(rdr.sch, key.(types.Tuple), val.(types.Tuple))
+	return noms.SqlRowFromTuples(rdr.sch, key.(types.Tuple), val.(types.Tuple))
 }
 
-func newPkTableReader(ctx context.Context, tbl *doltdb.Table, sch schema.Schema, buffered bool) (SqlTableReader, error) {
+// Close implements the TableReadCloser interface.
+func (rdr pkTableReader) Close(_ context.Context) error {
+	return nil
+}
+
+func newPkTableReader(ctx context.Context, tbl *doltdb.Table, sch schema.Schema, buffered bool) (pkTableReader, error) {
 	rows, err := tbl.GetRowData(ctx)
 	if err != nil {
-		return nil, err
+		return pkTableReader{}, err
 	}
 
 	var iter types.MapIterator
@@ -80,22 +84,13 @@ func newPkTableReader(ctx context.Context, tbl *doltdb.Table, sch schema.Schema,
 		iter, err = rows.BufferedIterator(ctx)
 	}
 	if err != nil {
-		return nil, err
+		return pkTableReader{}, err
 	}
 
 	return pkTableReader{
 		iter: iter,
 		sch:  sch,
 	}, nil
-}
-
-func newPkTableReaderForRanges(ctx context.Context, tbl *doltdb.Table, sch schema.Schema, ranges ...*noms.ReadRange) (SqlTableReader, error) {
-	rows, err := tbl.GetRowData(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return noms.NewNomsRangeReader(sch, rows, ranges), nil
 }
 
 func newPkTableReaderFrom(ctx context.Context, tbl *doltdb.Table, sch schema.Schema, val types.Value) (SqlTableReader, error) {
@@ -123,10 +118,6 @@ type partitionTableReader struct {
 var _ SqlTableReader = &partitionTableReader{}
 
 func newPkTableReaderForPartition(ctx context.Context, tbl *doltdb.Table, sch schema.Schema, start, end uint64) (SqlTableReader, error) {
-	if start > end {
-		return nil, fmt.Errorf("invalid partition table reader, start (%d) > end (%d)", start, end)
-	}
-
 	rows, err := tbl.GetRowData(ctx)
 	if err != nil {
 		return nil, err
@@ -144,16 +135,6 @@ func newPkTableReaderForPartition(ctx context.Context, tbl *doltdb.Table, sch sc
 		},
 		remaining: end - start,
 	}, nil
-}
-
-// ReadRow implements the TableReader interface.
-func (rdr *partitionTableReader) ReadRow(ctx context.Context) (row.Row, error) {
-	if rdr.remaining == 0 {
-		return nil, io.EOF
-	}
-	rdr.remaining -= 1
-
-	return rdr.SqlTableReader.ReadRow(ctx)
 }
 
 // ReadSqlRow implements the SqlTableReader interface.

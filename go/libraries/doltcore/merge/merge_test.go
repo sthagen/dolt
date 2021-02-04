@@ -111,7 +111,7 @@ func createRowMergeStruct(name string, vals, mergeVals, ancVals, expected []type
 		cols[tag] = schema.NewColumn(strconv.FormatInt(int64(tag), 10), uint64(tag), val.Kind(), false)
 	}
 
-	colColl, _ := schema.NewColCollection(cols...)
+	colColl := schema.NewColCollection(cols...)
 	sch := schema.MustSchemaFromCols(colColl)
 
 	tpl := valsToTestTupleWithPks(vals)
@@ -207,7 +207,7 @@ func TestRowMerge(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			actualResult, isConflict, err := rowMerge(context.Background(), types.Format_7_18, test.sch, test.row, test.mergeRow, test.ancRow)
+			actualResult, isConflict, err := pkRowMerge(context.Background(), types.Format_7_18, test.sch, test.row, test.mergeRow, test.ancRow)
 			assert.NoError(t, err)
 			assert.Equal(t, test.expectedResult, actualResult, "expected "+mustString(types.EncodedValue(context.Background(), test.expectedResult))+"got "+mustString(types.EncodedValue(context.Background(), actualResult)))
 			assert.Equal(t, test.expectConflict, isConflict)
@@ -225,7 +225,7 @@ const (
 	titleTag = 1
 )
 
-var colColl, _ = schema.NewColCollection(
+var colColl = schema.NewColCollection(
 	schema.NewColumn("id", idTag, types.UUIDKind, true, schema.NotNullConstraint{}),
 	schema.NewColumn("name", nameTag, types.StringKind, false, schema.NotNullConstraint{}),
 	schema.NewColumn("title", titleTag, types.StringKind, false),
@@ -350,17 +350,17 @@ func setupMergeTest(t *testing.T) (types.ValueReadWriter, *doltdb.Commit, *doltd
 	emptyMap, err := types.NewMap(context.Background(), vrw)
 	require.NoError(t, err)
 
-	tbl, err := doltdb.NewTable(context.Background(), vrw, schVal, initialRows, emptyMap)
+	tbl, err := doltdb.NewTable(context.Background(), vrw, schVal, initialRows, emptyMap, nil)
 	require.NoError(t, err)
 	tbl, err = editor.RebuildAllIndexes(context.Background(), tbl)
 	require.NoError(t, err)
 
-	updatedTbl, err := doltdb.NewTable(context.Background(), vrw, schVal, updatedRows, emptyMap)
+	updatedTbl, err := doltdb.NewTable(context.Background(), vrw, schVal, updatedRows, emptyMap, nil)
 	require.NoError(t, err)
 	updatedTbl, err = editor.RebuildAllIndexes(context.Background(), updatedTbl)
 	require.NoError(t, err)
 
-	mergeTbl, err := doltdb.NewTable(context.Background(), vrw, schVal, mergeRows, emptyMap)
+	mergeTbl, err := doltdb.NewTable(context.Background(), vrw, schVal, mergeRows, emptyMap, nil)
 	require.NoError(t, err)
 	mergeTbl, err = editor.RebuildAllIndexes(context.Background(), mergeTbl)
 	require.NoError(t, err)
@@ -438,7 +438,7 @@ func TestMergeCommits(t *testing.T) {
 	assert.NoError(t, err)
 	emptyMap, err := types.NewMap(context.Background(), vrw)
 	assert.NoError(t, err)
-	expected, err := doltdb.NewTable(context.Background(), vrw, targVal, expectedRows, emptyMap)
+	expected, err := doltdb.NewTable(context.Background(), vrw, targVal, expectedRows, emptyMap, nil)
 	assert.NoError(t, err)
 	expected, err = editor.RebuildAllIndexes(context.Background(), expected)
 	assert.NoError(t, err)

@@ -78,6 +78,8 @@ const (
 	AuthorParam      = "author"
 	ForceFlag        = "force"
 	AllFlag          = "all"
+	HardResetParam   = "hard"
+	SoftResetParam   = "soft"
 )
 
 // Creates the argparser shared dolt commit cli and DOLT_COMMIT.
@@ -89,5 +91,19 @@ func CreateCommitArgParser() *argparser.ArgParser {
 	ap.SupportsFlag(ForceFlag, "f", "Ignores any foreign key warnings and proceeds with the commit.")
 	ap.SupportsString(AuthorParam, "", "author", "Specify an explicit author using the standard A U Thor <author@example.com> format.")
 	ap.SupportsFlag(AllFlag, "a", "Adds all edited files in working to staged.")
+	return ap
+}
+
+func CreateAddArgParser() *argparser.ArgParser {
+	ap := argparser.NewArgParser()
+	ap.ArgListHelp = append(ap.ArgListHelp, [2]string{"table", "Working table(s) to add to the list tables staged to be committed. The abbreviation '.' can be used to add all tables."})
+	ap.SupportsFlag("all", "A", "Stages any and all changes (adds, deletes, and modifications).")
+	return ap
+}
+
+func CreateResetArgParser() *argparser.ArgParser {
+	ap := argparser.NewArgParser()
+	ap.SupportsFlag(HardResetParam, "", "Resets the working tables and staged tables. Any changes to tracked tables in the working tree since {{.LessThan}}commit{{.GreaterThan}} are discarded.")
+	ap.SupportsFlag(SoftResetParam, "", "Does not touch the working tables, but removes all tables staged to be committed.")
 	return ap
 }

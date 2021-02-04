@@ -15,6 +15,7 @@
 package typeinfo
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 
@@ -76,8 +77,27 @@ func (ti *decimalType) ConvertNomsValueToValue(v types.Value) (interface{}, erro
 	return nil, fmt.Errorf(`"%v" cannot convert NomsKind "%v" to a value`, ti.String(), v.Kind())
 }
 
+// ReadFrom reads a go value from a noms types.CodecReader directly
+func (ti *decimalType) ReadFrom(_ *types.NomsBinFormat, reader types.CodecReader) (interface{}, error) {
+	k := reader.ReadKind()
+	switch k {
+	case types.DecimalKind:
+		dec, err := reader.ReadDecimal()
+
+		if err != nil {
+			return nil, err
+		}
+
+		return dec.StringFixed(int32(ti.sqlDecimalType.Scale())), nil
+	case types.NullKind:
+		return nil, nil
+	}
+
+	return nil, fmt.Errorf(`"%v" cannot convert NomsKind "%v" to a value`, ti.String(), k)
+}
+
 // ConvertValueToNomsValue implements TypeInfo interface.
-func (ti *decimalType) ConvertValueToNomsValue(v interface{}) (types.Value, error) {
+func (ti *decimalType) ConvertValueToNomsValue(ctx context.Context, vrw types.ValueReadWriter, v interface{}) (types.Value, error) {
 	if v == nil {
 		return types.NullValue, nil
 	}
@@ -153,11 +173,11 @@ func (ti *decimalType) NomsKind() types.NomsKind {
 }
 
 // ParseValue implements TypeInfo interface.
-func (ti *decimalType) ParseValue(str *string) (types.Value, error) {
+func (ti *decimalType) ParseValue(ctx context.Context, vrw types.ValueReadWriter, str *string) (types.Value, error) {
 	if str == nil || *str == "" {
 		return types.NullValue, nil
 	}
-	return ti.ConvertValueToNomsValue(*str)
+	return ti.ConvertValueToNomsValue(context.Background(), nil, *str)
 }
 
 // Promote implements TypeInfo interface.

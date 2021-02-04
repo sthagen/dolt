@@ -189,6 +189,29 @@ SQL
     [ "$output" == '{"rows": [{"a":1,"b":1.5,"c":"1","d":"2020-01-01 00:00:00 +0000 UTC"},{"a":2,"b":2.5,"c":"2","d":"2020-02-02 00:00:00 +0000 UTC"},{"a":3,"c":"3","d":"2020-03-03 00:00:00 +0000 UTC"},{"a":4,"b":4.5,"d":"2020-04-04 00:00:00 +0000 UTC"},{"a":5,"b":5.5,"c":"5"}]}' ]
 }
 
+@test "sql output for escaped longtext exports properly" {
+ dolt sql <<SQL
+    CREATE TABLE test (
+    a int primary key,
+    v LONGTEXT
+);
+SQL
+dolt sql <<SQL
+    insert into test values (1, "{""key"": ""value""}");
+    insert into test values (2, """Hello""");
+SQL
+
+    run dolt sql -r json -q "select * from test order by a"
+    [ $status -eq 0 ]
+    [ "$output" == '{"rows": [{"a":1,"v":"{\"key\": \"value\"}"},{"a":2,"v":"\"Hello\""}]}' ]
+
+    run dolt sql -r csv -q "select * from test order by a"
+    [ $status -eq 0 ]
+    [[ "$output" =~ "a,v" ]] || false
+    [[ "$output" =~ '1,"{""key"": ""value""}"' ]] || false
+    [[ "$output" =~ '2,"""Hello"""' ]] || false
+}
+
 @test "sql ambiguous column name" {
     run dolt sql -q "select pk,pk1,pk2 from one_pk,two_pk where c1=0"
     [ "$status" -eq 1 ]
@@ -567,24 +590,24 @@ SQL
 }
 
 @test "sql select union all" {
-    run dolt sql -q "SELECT 2+2 FROM dual UNION ALL SELECT 2+2 FROM dual UNION ALL SELECT 2+3 FROM dual;"
+    run dolt sql -r csv -q "SELECT 2+2 FROM dual UNION ALL SELECT 2+2 FROM dual UNION ALL SELECT 2+3 FROM dual;"
     [ $status -eq 0 ]
-    [ "${#lines[@]}" -eq 7 ]
+    [ "${#lines[@]}" -eq 4 ]
 }
 
 @test "sql select union" {
-    run dolt sql -q "SELECT 2+2 FROM dual UNION SELECT 2+2 FROM dual UNION SELECT 2+3 FROM dual;"
+    run dolt sql -r csv -q "SELECT 2+2 FROM dual UNION SELECT 2+2 FROM dual UNION SELECT 2+3 FROM dual;"
     [ $status -eq 0 ]
-    [ "${#lines[@]}" -eq 7 ]
-    run dolt sql -q "SELECT 2+2 FROM dual UNION DISTINCT SELECT 2+2 FROM dual UNION SELECT 2+3 FROM dual;"
+    [ "${#lines[@]}" -eq 3 ]
+    run dolt sql -r csv -q "SELECT 2+2 FROM dual UNION DISTINCT SELECT 2+2 FROM dual UNION SELECT 2+3 FROM dual;"
     [ $status -eq 0 ]
-    [ "${#lines[@]}" -eq 6 ]
-    run dolt sql -q "(SELECT 2+2 FROM dual UNION DISTINCT SELECT 2+2 FROM dual) UNION SELECT 2+3 FROM dual;"
+    [ "${#lines[@]}" -eq 3 ]
+    run dolt sql -r csv -q "(SELECT 2+2 FROM dual UNION DISTINCT SELECT 2+2 FROM dual) UNION SELECT 2+3 FROM dual;"
     [ $status -eq 0 ]
-    [ "${#lines[@]}" -eq 6 ]
-    run dolt sql -q "SELECT 2+2 FROM dual UNION DISTINCT (SELECT 2+2 FROM dual UNION SELECT 2+3 FROM dual);"
+    [ "${#lines[@]}" -eq 3 ]
+    run dolt sql -r csv -q "SELECT 2+2 FROM dual UNION DISTINCT (SELECT 2+2 FROM dual UNION SELECT 2+3 FROM dual);"
     [ $status -eq 0 ]
-    [ "${#lines[@]}" -eq 6 ]
+    [ "${#lines[@]}" -eq 3 ]
 }
 
 @test "sql greatest/least with a timestamp" {

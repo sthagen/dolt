@@ -25,8 +25,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdocs"
 	"github.com/dolthub/dolt/go/libraries/doltcore/dtestutils"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
@@ -61,15 +61,18 @@ func TestCreateTable(t *testing.T) {
 				schemaNewColumn(t, "age", 7208, sql.Int32, false)),
 		},
 		{
+			name:          "Test create two column keyless schema",
+			query:         "create table testTable (id int, age int)",
+			expectedTable: "testTable",
+			expectedSchema: dtestutils.CreateSchema(
+				schemaNewColumn(t, "id", 4817, sql.Int32, false),
+				schemaNewColumn(t, "age", 7208, sql.Int32, false)),
+		},
+		{
 			name:          "Test syntax error",
 			query:         "create table testTable id int, age int",
 			expectedTable: "testTable",
 			expectedErr:   "syntax error",
-		},
-		{
-			name:        "Test no primary keys",
-			query:       "create table testTable (id int, age int)",
-			expectedErr: "no primary key columns",
 		},
 		{
 			name:        "Test bad table name",
@@ -980,7 +983,7 @@ func TestAlterSystemTables(t *testing.T) {
 	})
 
 	dtestutils.CreateTestTable(t, dEnv, "dolt_docs",
-		env.DoltDocsSchema,
+		doltdocs.Schema,
 		NewRow(types.String("LICENSE.md"), types.String("A license")))
 	dtestutils.CreateTestTable(t, dEnv, doltdb.DoltQueryCatalogTableName,
 		dtables.DoltQueryCatalogSchema,
@@ -1056,11 +1059,6 @@ func TestParseCreateTableStatement(t *testing.T) {
 			query:         "create table testTable id int, age int",
 			expectedTable: "testTable",
 			expectedErr:   "syntax error",
-		},
-		{
-			name:        "Test no primary keys",
-			query:       "create table testTable (id int, age int)",
-			expectedErr: "no primary key columns",
 		},
 		{
 			name:        "Test bad table name begins with number",
@@ -1329,7 +1327,7 @@ INSERT INTO child_non_unq VALUES ('1', 1), ('2', NULL), ('3', 3), ('4', 3), ('5'
 	require.NoError(t, err)
 	_, err = ExecuteSql(dEnv, root, "INSERT INTO child_unq VALUES ('6', 5)")
 	if assert.Error(t, err) {
-		assert.Contains(t, err.(errhand.VerboseError).Verbose(), "UNIQUE constraint violation")
+		assert.Contains(t, err.Error(), "UNIQUE constraint violation")
 	}
 	root, err = ExecuteSql(dEnv, root, "INSERT INTO child_non_unq VALUES ('6', 5)")
 	require.NoError(t, err)

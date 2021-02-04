@@ -38,6 +38,7 @@ import (
 	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/dolthub/dolt/go/libraries/utils/tracing"
 	"github.com/dolthub/dolt/go/store/blobstore"
 	"github.com/dolthub/dolt/go/store/chunks"
 	"github.com/dolthub/dolt/go/store/hash"
@@ -392,6 +393,25 @@ func newNomsBlockStore(ctx context.Context, nbfVerStr string, mm manifestManager
 	return nbs, nil
 }
 
+// WithoutConjoiner returns a new *NomsBlockStore instance that will not
+// conjoin table files during manifest updates. Used in some server-side
+// contexts when things like table file maintenance is done out-of-process. Not
+// safe for use outside of NomsBlockStore construction.
+func (nbs *NomsBlockStore) WithoutConjoiner() *NomsBlockStore {
+	return &NomsBlockStore{
+		mm:       nbs.mm,
+		p:        nbs.p,
+		c:        noopConjoiner{},
+		mu:       sync.RWMutex{},
+		mt:       nbs.mt,
+		tables:   nbs.tables,
+		upstream: nbs.upstream,
+		mtSize:   nbs.mtSize,
+		putCount: nbs.putCount,
+		stats:    nbs.stats,
+	}
+}
+
 func (nbs *NomsBlockStore) Put(ctx context.Context, c chunks.Chunk) error {
 	t1 := time.Now()
 	a := addr(c.Hash())
@@ -423,6 +443,11 @@ func (nbs *NomsBlockStore) addChunk(ctx context.Context, h addr, data []byte) bo
 }
 
 func (nbs *NomsBlockStore) Get(ctx context.Context, h hash.Hash) (chunks.Chunk, error) {
+	span, ctx := tracing.StartSpan(ctx, "nbs.Get")
+	defer func() {
+		span.Finish()
+	}()
+
 	t1 := time.Now()
 	defer func() {
 		nbs.stats.GetLatency.SampleTimeSince(t1)
@@ -467,12 +492,22 @@ func (nbs *NomsBlockStore) Get(ctx context.Context, h hash.Hash) (chunks.Chunk, 
 }
 
 func (nbs *NomsBlockStore) GetMany(ctx context.Context, hashes hash.HashSet, found func(*chunks.Chunk)) error {
+	span, ctx := tracing.StartSpan(ctx, "nbs.GetMany")
+	span.LogKV("num_hashes", len(hashes))
+	defer func() {
+		span.Finish()
+	}()
 	return nbs.getManyWithFunc(ctx, hashes, func(ctx context.Context, cr chunkReader, eg *errgroup.Group, reqs []getRecord, stats *Stats) (bool, error) {
 		return cr.getMany(ctx, eg, reqs, found, nbs.stats)
 	})
 }
 
 func (nbs *NomsBlockStore) GetManyCompressed(ctx context.Context, hashes hash.HashSet, found func(CompressedChunk)) error {
+	span, ctx := tracing.StartSpan(ctx, "nbs.GetManyCompressed")
+	span.LogKV("num_hashes", len(hashes))
+	defer func() {
+		span.Finish()
+	}()
 	return nbs.getManyWithFunc(ctx, hashes, func(ctx context.Context, cr chunkReader, eg *errgroup.Group, reqs []getRecord, stats *Stats) (bool, error) {
 		return cr.getManyCompressed(ctx, eg, reqs, found, nbs.stats)
 	})

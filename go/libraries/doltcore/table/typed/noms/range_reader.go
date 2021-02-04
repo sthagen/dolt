@@ -112,27 +112,26 @@ func (nrr *NomsRangeReader) GetSchema() schema.Schema {
 // IsBadRow(err) will be return true. This is a potentially non-fatal error and callers can decide if they want to
 // continue on a bad row, or fail.
 func (nrr *NomsRangeReader) ReadRow(ctx context.Context) (row.Row, error) {
-	key, val, err := nrr.next(ctx)
+	k, v, err := nrr.ReadKV(ctx)
+
 	if err != nil {
 		return nil, err
 	}
 
-	return row.FromNoms(nrr.sch, key, val)
+	return row.FromNoms(nrr.sch, k, v)
 }
 
-func (nrr *NomsRangeReader) ReadSqlRow(ctx context.Context) (sql.Row, error) {
-	key, val, err := nrr.next(ctx)
-	if err != nil {
-		return nil, err
-	}
+func (nrr *NomsRangeReader) ReadKey(ctx context.Context) (types.Tuple, error) {
+	k, _, err := nrr.ReadKV(ctx)
 
-	return row.SqlRowFromTuples(nrr.sch, key, val)
+	return k, err
 }
 
-func (nrr *NomsRangeReader) next(ctx context.Context) (key, val types.Tuple, err error) {
+func (nrr *NomsRangeReader) ReadKV(ctx context.Context) (types.Tuple, types.Tuple, error) {
+	var err error
+	var k types.Tuple
+	var v types.Tuple
 	for nrr.itr != nil || nrr.idx < len(nrr.ranges) {
-		var k types.Value
-		var v types.Value
 		if nrr.itr == nil {
 			r := nrr.ranges[nrr.idx]
 			nrr.idx++
@@ -144,46 +143,42 @@ func (nrr *NomsRangeReader) next(ctx context.Context) (key, val types.Tuple, err
 			}
 
 			if err != nil {
-				return key, val, err
+				return types.Tuple{}, types.Tuple{}, err
 			}
 
 			nrr.currCheck = r.Check
 
-			k, v, err = nrr.itr.Next(ctx)
+			k, v, err = nrr.itr.NextTuple(ctx)
 
-			if !r.Inclusive && r.Start.Equals(k) {
-				k, v, err = nrr.itr.Next(ctx)
+			if err == nil && !r.Inclusive && r.Start.Compare(k) == 0 {
+				k, v, err = nrr.itr.NextTuple(ctx)
 			}
 		} else {
-			k, v, err = nrr.itr.Next(ctx)
+			k, v, err = nrr.itr.NextTuple(ctx)
 		}
 
-		if err != nil {
-			return key, val, err
+		if err != nil && err != io.EOF {
+			return types.Tuple{}, types.Tuple{}, err
 		}
 
 		var inRange bool
-		if k != nil {
-			inRange, err = nrr.currCheck(k.(types.Tuple))
+		if err != io.EOF {
+			inRange, err = nrr.currCheck(k)
 
 			if err != nil {
-				return key, val, err
+				return types.Tuple{}, types.Tuple{}, err
 			}
 
-			if !inRange {
-				nrr.itr = nil
-				nrr.currCheck = nil
-				continue
-			} else {
-				return k.(types.Tuple), v.(types.Tuple), nil
+			if inRange {
+				return k, v, nil
 			}
-		} else {
-			nrr.itr = nil
-			nrr.currCheck = nil
 		}
+
+		nrr.itr = nil
+		nrr.currCheck = nil
 	}
 
-	return key, val, io.EOF
+	return types.Tuple{}, types.Tuple{}, io.EOF
 }
 
 // VerifySchema checks that the incoming schema matches the schema from the existing table
@@ -194,4 +189,41 @@ func (nrr *NomsRangeReader) VerifySchema(outSch schema.Schema) (bool, error) {
 // Close should release resources being held
 func (nrr *NomsRangeReader) Close(ctx context.Context) error {
 	return nil
+}
+
+// SqlRowFromTuples constructs a go-mysql-server/sql.Row from Noms tuples.
+func SqlRowFromTuples(sch schema.Schema, key, val types.Tuple) (sql.Row, error) {
+	allCols := sch.GetAllCols()
+	colVals := make(sql.Row, allCols.Size())
+
+	keySl, err := key.AsSlice()
+	if err != nil {
+		return nil, err
+	}
+	valSl, err := val.AsSlice()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, sl := range []types.TupleValueSlice{keySl, valSl} {
+		var convErr error
+		err := row.IterPkTuple(sl, func(tag uint64, val types.Value) (stop bool, err error) {
+			if idx, ok := allCols.TagToIdx[tag]; ok {
+				col := allCols.GetByIndex(idx)
+				colVals[idx], convErr = col.TypeInfo.ConvertNomsValueToValue(val)
+
+				if convErr != nil {
+					return false, err
+				}
+			}
+
+			return false, nil
+		})
+
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return sql.NewRow(colVals...), nil
 }

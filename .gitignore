@@ -1,6 +1,7 @@
 **/.idea/
 .vscode
-
+.run
+venv
 
 go.sum
 go.mod

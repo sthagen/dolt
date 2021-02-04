@@ -135,7 +135,8 @@ func ForeignKeyIsSatisfied(ctx context.Context, fk doltdb.ForeignKey, childIdx, 
 		return err
 	}
 
-	rc, err := rowconv.NewRowConverter(fm)
+	vrw := types.NewMemoryValueStore() // We are checking fks rather than persisting any values, so an internal VRW can be used
+	rc, err := rowconv.NewRowConverter(ctx, vrw, fm)
 	if err != nil {
 		return err
 	}
@@ -162,7 +163,7 @@ func ForeignKeyIsSatisfied(ctx context.Context, fk doltdb.ForeignKey, childIdx, 
 			continue
 		}
 
-		partial, err := parentIdxRow.ReduceToIndexPartialKey(parentDef)
+		partial, err := row.ReduceToIndexPartialKey(parentDef, parentIdxRow)
 		if err != nil {
 			return err
 		}

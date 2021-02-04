@@ -22,16 +22,12 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/utils/funcitr"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
 	"github.com/dolthub/dolt/go/libraries/utils/set"
 )
 
 const (
 	// DoltNamespace is the name prefix of dolt system tables. We reserve all tables that begin with dolt_ for system use.
 	DoltNamespace = "dolt_"
-
-	// SystemTableReservedMin defines the lower bound of the tag space reserved for system tables
-	SystemTableReservedMin uint64 = schema.ReservedTagMin << 1
 )
 
 var ErrSystemTableCannotBeModified = errors.New("system tables cannot be dropped or altered")
@@ -138,6 +134,7 @@ var generatedSystemTables = []string{
 	TableOfTablesInConflictName,
 	CommitsTableName,
 	CommitAncestorsTableName,
+	StatusTableName,
 }
 
 var generatedSystemTablePrefixes = []string{
@@ -150,23 +147,10 @@ var generatedSystemTablePrefixes = []string{
 const (
 	// DocTableName is the name of the dolt table containing documents such as the license and readme
 	DocTableName = "dolt_docs"
-	// LicensePk is the key for accessing the license within the docs table
-	LicensePk = "LICENSE.md"
-	// ReadmePk is the key for accessing the readme within the docs table
-	ReadmePk = "README.md"
 	// DocPkColumnName is the name of the pk column in the docs table
 	DocPkColumnName = "doc_name"
-	//DocTextColumnName is the name of the column containing the documeent contents in the docs table
+	//DocTextColumnName is the name of the column containing the document contents in the docs table
 	DocTextColumnName = "doc_text"
-)
-
-// Tags for dolt_docs table
-// for info on unaligned constant: https://github.com/dolthub/dolt/pull/663
-const (
-	// DocNameTag is the tag of the name column in the docs table
-	DocNameTag = iota + SystemTableReservedMin + uint64(5)
-	// DocTextTag is the tag of the text column in the docs table
-	DocTextTag
 )
 
 const (
@@ -189,21 +173,6 @@ const (
 	QueryCatalogDescriptionCol = "description"
 )
 
-// Tags for dolt_query_catalog table
-// for info on unaligned constant: https://github.com/dolthub/dolt/pull/663
-const (
-	// QueryCatalogIdTag is the tag of the id column in the query catalog table
-	QueryCatalogIdTag = iota + SystemTableReservedMin + uint64(3005)
-	// QueryCatalogOrderTag is the tag of the column containing the sort order in the query catalog table
-	QueryCatalogOrderTag
-	// QueryCatalogNameTag is the tag of the column containing the name of the query in the query catalog table
-	QueryCatalogNameTag
-	// QueryCatalogQueryTag is the tag of the column containing the query in the query catalog table
-	QueryCatalogQueryTag
-	// QueryCatalogDescriptionTag is the tag of the column containing the query description in the query catalog table
-	QueryCatalogDescriptionTag
-)
-
 const (
 	// SchemasTableName is the name of the dolt schema fragment table
 	SchemasTableName = "dolt_schemas"
@@ -220,20 +189,6 @@ const (
 	SchemasTablesIndexName = "fragment_name"
 )
 
-// Tags for dolt_schemas table
-// for info on unaligned constant: https://github.com/dolthub/dolt/pull/663
-const (
-	// Old tag numbers for reference
-	//DoltSchemasTypeTag = iota + SystemTableReservedMin + uint64(4003)
-	//DoltSchemasNameTag
-	//DoltSchemasFragmentTag
-
-	DoltSchemasIdTag = iota + SystemTableReservedMin + uint64(4007)
-	DoltSchemasTypeTag
-	DoltSchemasNameTag
-	DoltSchemasFragmentTag
-)
-
 const (
 	// DoltHistoryTablePrefix is the prefix assigned to all the generated history tables
 	DoltHistoryTablePrefix = "dolt_history_"
@@ -243,19 +198,6 @@ const (
 	DoltCommitDiffTablePrefix = "dolt_commit_diff_"
 	// DoltConfTablePrefix is the prefix assigned to all the generated conflict tables
 	DoltConfTablePrefix = "dolt_conflicts_"
-)
-
-// Tags for dolt_history_ table
-const (
-	HistoryCommitterTag = iota + SystemTableReservedMin + uint64(1000)
-	HistoryCommitHashTag
-	HistoryCommitDateTag
-)
-
-// Tags for dolt_diff_ table
-const (
-	DiffCommitTag = iota + SystemTableReservedMin + uint64(2000)
-	DiffCommitDateTag
 )
 
 const (
@@ -273,4 +215,7 @@ const (
 
 	// CommitAncestorsTableName is the commit_ancestors system table name
 	CommitAncestorsTableName = "dolt_commit_ancestors"
+
+	// StatusTableName is the status system table name.
+	StatusTableName = "dolt_status"
 )

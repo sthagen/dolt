@@ -262,7 +262,9 @@ func execNoFFMerge(ctx context.Context, apr *argparser.ArgParseResults, dEnv *en
 		return errhand.BuildDError("error: committing").AddCause(err).Build()
 	}
 
-	_, err = actions.CommitStaged(ctx, dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter(), actions.CommitStagedProps{
+	dbData := dEnv.DbData()
+
+	_, err = actions.CommitStaged(ctx, dbData, actions.CommitStagedProps{
 		Message:          msg,
 		Date:             t,
 		AllowEmpty:       apr.Contains(cli.AllowEmptyFlag),
@@ -320,7 +322,7 @@ func executeFFMerge(ctx context.Context, squash bool, dEnv *env.DoltEnv, cm2 *do
 		}
 	}
 
-	unstagedDocs, err := actions.GetUnstagedDocs(ctx, dEnv)
+	unstagedDocs, err := actions.GetUnstagedDocs(ctx, dEnv.DbData())
 	if err != nil {
 		return errhand.BuildDError("error: unable to determine unstaged docs").AddCause(err).Build()
 	}
@@ -399,7 +401,7 @@ func mergedRootToWorking(ctx context.Context, squash bool, dEnv *env.DoltEnv, me
 		}
 	}
 
-	unstagedDocs, err := actions.GetUnstagedDocs(ctx, dEnv)
+	unstagedDocs, err := actions.GetUnstagedDocs(ctx, dEnv.DbData())
 	if err != nil {
 		return errhand.BuildDError("error: failed to determine unstaged docs").AddCause(err).Build()
 	}
@@ -416,7 +418,7 @@ func mergedRootToWorking(ctx context.Context, squash bool, dEnv *env.DoltEnv, me
 			if err != nil {
 				return errhand.BuildDError("error: failed to update docs to the new working root").AddCause(err).Build()
 			}
-			verr = UpdateStagedWithVErr(dEnv, mergedRoot)
+			verr = UpdateStagedWithVErr(dEnv.DoltDB, dEnv.RepoStateWriter(), mergedRoot)
 			if verr != nil {
 				// Log a new message here to indicate that merge was successful, only staging failed.
 				cli.Println("Unable to stage changes: add and commit to finish merge")

@@ -74,11 +74,7 @@ var createPeopleTable = `
 	);`
 
 func columnCollection(cols ...schema.Column) *schema.ColCollection {
-	pcc, err := schema.NewColCollection(cols...)
-	if err != nil {
-		panic(err)
-	}
-	return pcc
+	return schema.NewColCollection(cols...)
 }
 
 func newRow(vals row.TaggedValues, cc *schema.ColCollection) row.Row {
@@ -538,7 +534,7 @@ func checkSchema(t *testing.T, r *doltdb.RootValue, tableName string, expectedSc
 }
 
 func checkRows(t *testing.T, dEnv *env.DoltEnv, root *doltdb.RootValue, tableName string, sch schema.Schema, selectQuery string, expectedRows []row.Row) {
-	sqlDb := dsqle.NewDatabase("dolt", dEnv.DoltDB, dEnv.RepoStateReader(), dEnv.RepoStateWriter())
+	sqlDb := dsqle.NewDatabase("dolt", dEnv.DbData())
 	engine, sqlCtx, err := dsqle.NewTestEngine(context.Background(), sqlDb, root)
 	require.NoError(t, err)
 
@@ -554,7 +550,7 @@ func checkRows(t *testing.T, dEnv *env.DoltEnv, root *doltdb.RootValue, tableNam
 			break
 		}
 		require.NoError(t, err)
-		rr, err := row.SqlRowToDoltRow(root.VRW().Format(), r, sch)
+		rr, err := sqlutil.SqlRowToDoltRow(context.Background(), root.VRW(), r, sch)
 		require.NoError(t, err)
 		actualRows = append(actualRows, rr)
 	}

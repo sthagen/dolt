@@ -51,7 +51,7 @@ const (
 	IndexName = "idx_name"
 )
 
-var typedColColl, _ = schema.NewColCollection(
+var typedColColl = schema.NewColCollection(
 	schema.NewColumn("id", IdTag, types.UUIDKind, true, schema.NotNullConstraint{}),
 	schema.NewColumn("name", NameTag, types.StringKind, false, schema.NotNullConstraint{}),
 	schema.NewColumn("age", AgeTag, types.UintKind, false, schema.NotNullConstraint{}),
@@ -163,11 +163,11 @@ func AddColToRows(t *testing.T, rs []row.Row, tag uint64, val types.Value) []row
 		return rs
 	}
 
-	colColl, err := schema.NewColCollection(schema.NewColumn("unused", tag, val.Kind(), false))
-	require.NoError(t, err)
+	colColl := schema.NewColCollection(schema.NewColumn("unused", tag, val.Kind(), false))
 	fakeSch := schema.UnkeyedSchemaFromCols(colColl)
 
 	newRows := make([]row.Row, len(rs))
+	var err error
 	for i, r := range rs {
 		newRows[i], err = r.SetColVal(tag, val, fakeSch)
 		require.NoError(t, err)
@@ -217,4 +217,20 @@ func MustRowData(t *testing.T, ctx context.Context, vrw types.ValueReadWriter, s
 	require.NoError(t, err)
 
 	return &m
+}
+
+// MustMap contructs a types.Map for a slice of alternating key, value types.Value.
+func MustMap(t *testing.T, vrw types.ValueReadWriter, kv ...types.Value) types.Map {
+	m, err := types.NewMap(context.Background(), vrw, kv...)
+	require.NoError(t, err)
+	return m
+}
+
+// MustMap contructs a types.Tuple for a slice of types.Values.
+func MustTuple(vals ...types.Value) types.Tuple {
+	tup, err := types.NewTuple(types.Format_Default, vals...)
+	if err != nil {
+		panic(err)
+	}
+	return tup
 }
