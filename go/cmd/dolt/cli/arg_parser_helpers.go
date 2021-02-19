@@ -80,7 +80,16 @@ const (
 	AllFlag          = "all"
 	HardResetParam   = "hard"
 	SoftResetParam   = "soft"
+	CheckoutCoBranch = "b"
+	NoFFParam        = "no-ff"
+	SquashParam      = "squash"
+	AbortParam       = "abort"
 )
+
+var mergeAbortDetails = `Abort the current conflict resolution process, and try to reconstruct the pre-merge state.
+
+If there were uncommitted working set changes present when the merge started, {{.EmphasisLeft}}dolt merge --abort{{.EmphasisRight}} will be unable to reconstruct these changes. It is therefore recommended to always commit or stash your changes before running dolt merge.
+`
 
 // Creates the argparser shared dolt commit cli and DOLT_COMMIT.
 func CreateCommitArgParser() *argparser.ArgParser {
@@ -91,6 +100,15 @@ func CreateCommitArgParser() *argparser.ArgParser {
 	ap.SupportsFlag(ForceFlag, "f", "Ignores any foreign key warnings and proceeds with the commit.")
 	ap.SupportsString(AuthorParam, "", "author", "Specify an explicit author using the standard A U Thor <author@example.com> format.")
 	ap.SupportsFlag(AllFlag, "a", "Adds all edited files in working to staged.")
+	return ap
+}
+
+func CreateMergeArgParser() *argparser.ArgParser {
+	ap := argparser.NewArgParser()
+	ap.SupportsFlag(NoFFParam, "", "Create a merge commit even when the merge resolves as a fast-forward.")
+	ap.SupportsFlag(SquashParam, "", "Merges changes to the working set without updating the commit history")
+	ap.SupportsString(CommitMessageArg, "m", "msg", "Use the given {{.LessThan}}msg{{.GreaterThan}} as the commit message.")
+	ap.SupportsFlag(AbortParam, "", mergeAbortDetails)
 	return ap
 }
 
@@ -105,5 +123,11 @@ func CreateResetArgParser() *argparser.ArgParser {
 	ap := argparser.NewArgParser()
 	ap.SupportsFlag(HardResetParam, "", "Resets the working tables and staged tables. Any changes to tracked tables in the working tree since {{.LessThan}}commit{{.GreaterThan}} are discarded.")
 	ap.SupportsFlag(SoftResetParam, "", "Does not touch the working tables, but removes all tables staged to be committed.")
+	return ap
+}
+
+func CreateCheckoutArgParser() *argparser.ArgParser {
+	ap := argparser.NewArgParser()
+	ap.SupportsString(CheckoutCoBranch, "", "branch", "Create a new branch named {{.LessThan}}new_branch{{.GreaterThan}} and start it at {{.LessThan}}start_point{{.GreaterThan}}.")
 	return ap
 }

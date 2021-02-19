@@ -144,7 +144,6 @@ func (cmd DiffCmd) createArgParser() *argparser.ArgParser {
 	ap.SupportsString(FormatFlag, "r", "result output format", "How to format diff output. Valid values are tabular & sql. Defaults to tabular. ")
 	ap.SupportsString(whereParam, "", "column", "filters columns based on values in the diff.  See {{.EmphasisLeft}}dolt diff --help{{.EmphasisRight}} for details.")
 	ap.SupportsInt(limitParam, "", "record_count", "limits to the first N diffs.")
-	ap.SupportsString(QueryFlag, "q", "query", "diffs the results of a query at two commits")
 	ap.SupportsFlag(CachedFlag, "c", "Show only the unstaged data changes.")
 	return ap
 }
@@ -159,11 +158,6 @@ func (cmd DiffCmd) Exec(ctx context.Context, commandStr string, args []string, d
 
 	if err != nil {
 		return HandleVErrAndExitCode(errhand.VerboseErrorFromError(err), usage)
-	}
-
-	if dArgs.query != "" {
-		verr := diffQuery(ctx, dEnv, fromRoot, toRoot, dArgs.query)
-		return HandleVErrAndExitCode(verr, usage)
 	}
 
 	verr := diffUserTables(ctx, fromRoot, toRoot, dArgs)
@@ -481,7 +475,7 @@ func tabularSchemaDiff(ctx context.Context, td diff.TableDelta, fromSchemas, toS
 		return errhand.BuildDError("cannot retrieve schema for table %s", td.ToName).AddCause(err).Build()
 	}
 
-	eq, _ := schema.SchemasAreEqual(fromSch, toSch)
+	eq := schema.SchemasAreEqual(fromSch, toSch)
 	if eq && !td.HasFKChanges() {
 		return nil
 	}
@@ -588,7 +582,7 @@ func sqlSchemaDiff(ctx context.Context, td diff.TableDelta, toSchemas map[string
 			cli.Println(sqlfmt.RenameTableStmt(td.FromName, td.ToName))
 		}
 
-		eq, _ := schema.SchemasAreEqual(fromSch, toSch)
+		eq := schema.SchemasAreEqual(fromSch, toSch)
 		if eq && !td.HasFKChanges() {
 			return nil
 		}

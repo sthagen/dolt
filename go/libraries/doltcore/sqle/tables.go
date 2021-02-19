@@ -34,7 +34,6 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema/encoding"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema/typeinfo"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/sqlutil"
-	"github.com/dolthub/dolt/go/libraries/doltcore/table"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/libraries/utils/set"
 	"github.com/dolthub/dolt/go/store/types"
@@ -75,9 +74,12 @@ type DoltTable struct {
 	sqlSch sql.Schema
 	db     SqlDatabase
 
+	nbf        *types.NomsBinFormat
 	table      *doltdb.Table
 	sch        schema.Schema
 	autoIncCol schema.Column
+
+	projectedCols []string
 }
 
 func NewDoltTable(name string, sch schema.Schema, tbl *doltdb.Table, db SqlDatabase) DoltTable {
@@ -91,11 +93,13 @@ func NewDoltTable(name string, sch schema.Schema, tbl *doltdb.Table, db SqlDatab
 	})
 
 	return DoltTable{
-		name:       name,
-		db:         db,
-		table:      tbl,
-		sch:        sch,
-		autoIncCol: autoCol,
+		name:          name,
+		db:            db,
+		table:         tbl,
+		nbf:           tbl.Format(),
+		sch:           sch,
+		autoIncCol:    autoCol,
+		projectedCols: nil,
 	}
 }
 
@@ -211,6 +215,11 @@ func (t *DoltTable) NumRows(ctx *sql.Context) (uint64, error) {
 	return m.Len(), nil
 }
 
+// Format returns the NomsBinFormat for the underlying table
+func (t *DoltTable) Format() *types.NomsBinFormat {
+	return t.nbf
+}
+
 // Schema returns the schema for this table.
 func (t *DoltTable) Schema() sql.Schema {
 	return t.sqlSchema()
@@ -242,7 +251,7 @@ func (t *DoltTable) Partitions(ctx *sql.Context) (sql.PartitionIter, error) {
 	numElements := rowData.Len()
 
 	if numElements == 0 {
-		return newDoltTablePartitionIter(rowData, doltTablePartition{0, 0}), nil
+		return newDoltTablePartitionIter(rowData, doltTablePartition{0, 0, rowData}), nil
 	}
 
 	maxPartitions := uint64(partitionMultiplier * runtime.NumCPU())
@@ -259,9 +268,9 @@ func (t *DoltTable) Partitions(ctx *sql.Context) (sql.PartitionIter, error) {
 	partitions := make([]doltTablePartition, numPartitions)
 	itemsPerPartition := numElements / numPartitions
 	for i := uint64(0); i < numPartitions-1; i++ {
-		partitions[i] = doltTablePartition{i * itemsPerPartition, (i + 1) * itemsPerPartition}
+		partitions[i] = doltTablePartition{i * itemsPerPartition, (i + 1) * itemsPerPartition, rowData}
 	}
-	partitions[numPartitions-1] = doltTablePartition{(numPartitions - 1) * itemsPerPartition, numElements}
+	partitions[numPartitions-1] = doltTablePartition{(numPartitions - 1) * itemsPerPartition, numElements, rowData}
 
 	return newDoltTablePartitionIter(rowData, partitions...), nil
 }
@@ -272,13 +281,13 @@ func (itr emptyRowIterator) Next() (sql.Row, error) {
 	return nil, io.EOF
 }
 
-func (itr emptyRowIterator) Close() error {
+func (itr emptyRowIterator) Close(*sql.Context) error {
 	return nil
 }
 
 // Returns the table rows for the partition given
 func (t *DoltTable) PartitionRows(ctx *sql.Context, partition sql.Partition) (sql.RowIter, error) {
-	return partitionRows(ctx, t, nil, partition)
+	return partitionRows(ctx, t, t.projectedCols, partition)
 }
 
 func partitionRows(ctx *sql.Context, t *DoltTable, projCols []string, partition sql.Partition) (sql.RowIter, error) {
@@ -288,9 +297,9 @@ func partitionRows(ctx *sql.Context, t *DoltTable, projCols []string, partition 
 			return emptyRowIterator{}, nil
 		}
 
-		return newRowIterator(t, ctx, projCols, &typedPartition)
+		return newRowIterator(ctx, t, projCols, &typedPartition)
 	case sqlutil.SinglePartition:
-		return newRowIterator(t, ctx, projCols, nil)
+		return newRowIterator(ctx, t, projCols, &doltTablePartition{rowData: typedPartition.RowData, end: NoUpperBound})
 	}
 
 	return nil, errors.New("unsupported partition type")
@@ -318,6 +327,14 @@ func (t *WritableDoltTable) WithIndexLookup(lookup sql.IndexLookup) sql.Table {
 	return &WritableIndexedDoltTable{
 		WritableDoltTable: t,
 		indexLookup:       dil,
+	}
+}
+
+func (t *WritableDoltTable) WithProjection(colNames []string) sql.Table {
+	return &WritableDoltTable{
+		DoltTable: *t.DoltTable.WithProjection(colNames).(*DoltTable),
+		db:        t.db,
+		ed:        t.ed,
 	}
 }
 
@@ -475,22 +492,19 @@ func (t *DoltTable) GetForeignKeys(ctx *sql.Context) ([]sql.ForeignKeyConstraint
 	return toReturn, nil
 }
 
-type projectedDoltTable struct {
-	*DoltTable
-	projectedCols []string
-}
-
-func (t *projectedDoltTable) Projection() []string {
+func (t *DoltTable) Projection() []string {
 	return t.projectedCols
 }
 
 func (t *DoltTable) WithProjection(colNames []string) sql.Table {
-	return &projectedDoltTable{t, colNames}
-}
-
-// Returns the table rows for the partition given
-func (t *projectedDoltTable) PartitionRows(ctx *sql.Context, partition sql.Partition) (sql.RowIter, error) {
-	return partitionRows(ctx, t.DoltTable, t.projectedCols, partition)
+	return &DoltTable{
+		name:          t.name,
+		db:            t.db,
+		table:         t.table,
+		sch:           t.sch,
+		autoIncCol:    t.autoIncCol,
+		projectedCols: colNames,
+	}
 }
 
 var _ sql.PartitionIter = (*doltTablePartitionIter)(nil)
@@ -508,7 +522,7 @@ func newDoltTablePartitionIter(rowData types.Map, partitions ...doltTablePartiti
 }
 
 // Close is required by the sql.PartitionIter interface. Does nothing.
-func (itr *doltTablePartitionIter) Close() error {
+func (itr *doltTablePartitionIter) Close(*sql.Context) error {
 	return nil
 }
 
@@ -529,11 +543,14 @@ func (itr *doltTablePartitionIter) Next() (sql.Partition, error) {
 
 var _ sql.Partition = (*doltTablePartition)(nil)
 
+const NoUpperBound = 0xffffffffffffffff
+
 type doltTablePartition struct {
 	// start is the first index of this partition (inclusive)
 	start uint64
 	// all elements in the partition will be less than end (exclusive)
-	end uint64
+	end     uint64
+	rowData types.Map
 }
 
 // Key returns the key for this partition, which must uniquely identity the partition.
@@ -717,7 +734,7 @@ func (t *AlterableDoltTable) ModifyColumn(ctx *sql.Context, columnName string, c
 		return err
 	}
 
-	existingCol, ok := sch.GetAllCols().GetByName(columnName)
+	existingCol, ok := sch.GetAllCols().GetByNameCaseInsensitive(columnName)
 	if !ok {
 		panic(fmt.Sprintf("Column %s not found. This is a bug.", columnName))
 	}
@@ -731,11 +748,38 @@ func (t *AlterableDoltTable) ModifyColumn(ctx *sql.Context, columnName string, c
 	if err != nil {
 		return err
 	}
-	declaresFk, _ := fkCollection.KeysForTable(t.name)
+	declaresFk, referencedByFk := fkCollection.KeysForTable(t.name)
 	for _, foreignKey := range declaresFk {
 		if (foreignKey.OnUpdate == doltdb.ForeignKeyReferenceOption_SetNull || foreignKey.OnDelete == doltdb.ForeignKeyReferenceOption_SetNull) &&
 			col.IsNullable() {
 			return fmt.Errorf("foreign key `%s` has SET NULL thus column `%s` cannot be altered to accept null values", foreignKey.Name, col.Name)
+		}
+	}
+
+	if !existingCol.TypeInfo.Equals(col.TypeInfo) {
+		for _, foreignKey := range declaresFk {
+			for _, tag := range foreignKey.TableColumns {
+				if tag == existingCol.Tag {
+					return fmt.Errorf("cannot alter a column's type when it is used in a foreign key")
+				}
+			}
+		}
+		for _, foreignKey := range referencedByFk {
+			for _, tag := range foreignKey.ReferencedTableColumns {
+				if tag == existingCol.Tag {
+					return fmt.Errorf("cannot alter a column's type when it is used in a foreign key")
+				}
+			}
+		}
+		if existingCol.Kind != col.Kind { // We only change the tag when the underlying Noms kind changes
+			tags, err := root.GenerateTagsForNewColumns(ctx, t.name, []string{col.Name}, []types.NomsKind{col.Kind})
+			if err != nil {
+				return err
+			}
+			if len(tags) != 1 {
+				return fmt.Errorf("expected a generated tag length of 1")
+			}
+			col.Tag = tags[0]
 		}
 	}
 
@@ -1028,7 +1072,7 @@ func (t *AlterableDoltTable) CreateForeignKey(
 	if err != nil {
 		return err
 	}
-	err = table.ForeignKeyIsSatisfied(ctx, foreignKey, tableIndexData, refTableIndexData, tableIndex, refTableIndex)
+	err = foreignKey.ValidateData(ctx, tableIndexData, refTableIndexData, tableIndex, refTableIndex)
 	if err != nil {
 		return err
 	}

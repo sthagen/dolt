@@ -292,7 +292,7 @@ func (itr *diffRowItr) Next() (sql.Row, error) {
 }
 
 // Close closes the iterator
-func (itr *diffRowItr) Close() (err error) {
+func (itr *diffRowItr) Close(*sql.Context) (err error) {
 	defer itr.ad.Close()
 	defer func() {
 		closeErr := itr.diffSrc.Close()
@@ -551,17 +551,13 @@ func (dp *diffPartitions) Next() (sql.Partition, error) {
 	}
 }
 
-func (dp *diffPartitions) Close() error {
+func (dp *diffPartitions) Close(*sql.Context) error {
 	return nil
 }
 
 // creates a RowConverter for transforming rows with the the given schema to this super schema.
 func rowConvForSchema(ctx context.Context, vrw types.ValueReadWriter, ss *schema.SuperSchema, sch schema.Schema) (*rowconv.RowConverter, error) {
-	eq, err := schema.SchemasAreEqual(sch, schema.EmptySchema)
-	if err != nil {
-		return nil, err
-	}
-	if eq {
+	if schema.SchemasAreEqual(sch, schema.EmptySchema) {
 		return rowconv.IdentityConverter, nil
 	}
 

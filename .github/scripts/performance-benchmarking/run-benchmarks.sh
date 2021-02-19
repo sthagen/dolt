@@ -33,7 +33,8 @@ echo "Setting to $TO_SERVER: $TO_VERSION"
 # use first 8 characters of TO_VERSION to differentiate
 # jobs
 short=${TO_VERSION:0:8}
-actorShort="$ACTOR-$short"
+lowered=$(echo "$ACTOR" | tr '[:upper:]' '[:lower:]')
+actorShort="$lowered-$short"
 
 jobname="$actorShort"
 
@@ -50,15 +51,14 @@ source "$TEMPLATE_SCRIPT" "$jobname" "$FROM_SERVER" "$FROM_VERSION" "$TO_SERVER"
 
 KUBECONFIG="$KUBECONFIG" kubectl apply -f job.json
 
-out=$(KUBECONFIG="$KUBECONFIG" kubectl wait job/"$jobname" --for=condition=complete -n performance-benchmarking --timeout=5400s || true)
+out=$(KUBECONFIG="$KUBECONFIG" kubectl wait job/"$jobname" --for=condition=complete -n performance-benchmarking --timeout=7200s || true)
 
 if [ "$out" != "job.batch/$jobname condition met" ]; then
   echo "output of kubectl wait: $out"
   KUBECONFIG="$KUBECONFIG" kubectl logs job/"$jobname" -n performance-benchmarking
 else
   echo "::set-output name=object-key::$timeprefix/$actorprefix/comparison-results.log"
+  KUBECONFIG="$KUBECONFIG" kubectl delete job/"$jobname" -n performance-benchmarking
 fi
-
-KUBECONFIG="$KUBECONFIG" kubectl delete job/"$jobname" -n performance-benchmarking
 
 exit 0

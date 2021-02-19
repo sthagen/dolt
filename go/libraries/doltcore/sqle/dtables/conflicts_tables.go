@@ -88,7 +88,7 @@ func (ct ConflictsTable) Schema() sql.Schema {
 
 // Partitions returns a PartitionIter which can be used to get all the data partitions
 func (ct ConflictsTable) Partitions(ctx *sql.Context) (sql.PartitionIter, error) {
-	return sqlutil.NewSinglePartitionIter(), nil
+	return sqlutil.NewSinglePartitionIter(types.Map{}), nil
 }
 
 // PartitionRows returns a RowIter for the given partition
@@ -120,7 +120,7 @@ func (itr conflictRowIter) Next() (sql.Row, error) {
 }
 
 // Close the iterator.
-func (itr conflictRowIter) Close() error {
+func (itr conflictRowIter) Close(*sql.Context) error {
 	return itr.rd.Close()
 }
 
