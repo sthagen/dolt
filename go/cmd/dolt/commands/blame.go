@@ -122,7 +122,7 @@ func (cmd BlameCmd) EventType() eventsapi.ClientEventType {
 func (cmd BlameCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cmd.createArgParser()
 	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, blameDocs, ap))
-	apr := cli.ParseArgs(ap, args, help)
+	apr := cli.ParseArgsOrDie(ap, args, help)
 
 	if apr.NArg() == 0 || apr.NArg() > 2 {
 		usage()
@@ -147,7 +147,7 @@ func parseCommitSpecAndTableName(dEnv *env.DoltEnv, apr *argparser.ArgParseResul
 	// if passed a single arg, assume it's a table name and revision is HEAD
 	if apr.NArg() == 1 {
 		tableName := apr.Arg(0)
-		return dEnv.RepoState.CWBHeadSpec(), tableName, nil
+		return dEnv.RepoStateReader().CWBHeadSpec(), tableName, nil
 	}
 
 	comSpecStr := apr.Arg(0)
@@ -155,7 +155,7 @@ func parseCommitSpecAndTableName(dEnv *env.DoltEnv, apr *argparser.ArgParseResul
 
 	// support being passed -- as a revision like git does even though it's a little gross
 	if comSpecStr == "--" {
-		return dEnv.RepoState.CWBHeadSpec(), tableName, nil
+		return dEnv.RepoStateReader().CWBHeadSpec(), tableName, nil
 	}
 
 	cs, err := doltdb.NewCommitSpec(comSpecStr)
@@ -167,7 +167,7 @@ func parseCommitSpecAndTableName(dEnv *env.DoltEnv, apr *argparser.ArgParseResul
 }
 
 func runBlame(ctx context.Context, dEnv *env.DoltEnv, cs *doltdb.CommitSpec, tableName string) error {
-	commit, err := dEnv.DoltDB.Resolve(ctx, cs, dEnv.RepoState.CWBHeadRef())
+	commit, err := dEnv.DoltDB.Resolve(ctx, cs, dEnv.RepoStateReader().CWBHeadRef())
 	if err != nil {
 		return err
 	}

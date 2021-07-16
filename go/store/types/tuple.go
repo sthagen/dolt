@@ -296,6 +296,25 @@ func NewTuple(nbf *NomsBinFormat, values ...Value) (Tuple, error) {
 	return Tuple{valueImpl{vrw, nbf, w.data(), nil}}, nil
 }
 
+// CopyOf creates a copy of a tuple.  This is necessary in cases where keeping a reference to the original tuple is
+// preventing larger objects from being collected.
+func (t Tuple) CopyOf(vrw ValueReadWriter) Tuple {
+	buff := make([]byte, len(t.buff))
+	offsets := make([]uint32, len(t.offsets))
+
+	copy(buff, t.buff)
+	copy(offsets, t.offsets)
+
+	return Tuple{
+		valueImpl{
+			buff:    buff,
+			offsets: offsets,
+			vrw:     vrw,
+			nbf:     t.nbf,
+		},
+	}
+}
+
 func (t Tuple) Empty() bool {
 	return t.Len() == 0
 }
@@ -360,47 +379,10 @@ func (t Tuple) Compare(other Tuple) int {
 	return bytes.Compare(t.buff, other.buff)
 }
 
+var tupleType = newType(CompoundDesc{UnionKind, nil})
+
 func (t Tuple) typeOf() (*Type, error) {
-	dec, count := t.decoderSkipToFields()
-	ts := make(typeSlice, 0, count)
-	var lastType *Type
-	for i := uint64(0); i < count; i++ {
-		if lastType != nil {
-			offset := dec.offset
-			is, err := dec.isValueSameTypeForSure(t.format(), lastType)
-
-			if err != nil {
-				return nil, err
-			}
-
-			if is {
-				continue
-			}
-			dec.offset = offset
-		}
-
-		var err error
-		lastType, err = dec.readTypeOfValue(t.format())
-
-		if err != nil {
-			return nil, err
-		}
-
-		if lastType.Kind() == UnknownKind {
-			// if any of the elements are unknown, return unknown
-			return nil, ErrUnknownType
-		}
-
-		ts = append(ts, lastType)
-	}
-
-	ut, err := makeUnionType(ts...)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return makeCompoundType(TupleKind, ut)
+	return tupleType, nil
 }
 
 func (t Tuple) decoderSkipToFields() (valueDecoder, uint64) {
@@ -438,6 +420,7 @@ func (t Tuple) IteratorAt(pos uint64) (*TupleIterator, error) {
 	return itr, nil
 }
 
+// AsSlice returns all of the values of this Tuple as a slice.
 func (t Tuple) AsSlice() (TupleValueSlice, error) {
 	dec, count := t.decoderSkipToFields()
 
@@ -452,6 +435,24 @@ func (t Tuple) AsSlice() (TupleValueSlice, error) {
 		sl[pos] = val
 	}
 
+	return sl, nil
+}
+
+// AsSubslice returns the first n values of this Tuple as a slice.
+func (t Tuple) AsSubslice(n uint64) (TupleValueSlice, error) {
+	dec, count := t.decoderSkipToFields()
+	if n < count {
+		count = n
+	}
+
+	sl := make(TupleValueSlice, count)
+	for pos := uint64(0); pos < count; pos++ {
+		val, err := dec.readValue(t.nbf)
+		if err != nil {
+			return nil, err
+		}
+		sl[pos] = val
+	}
 	return sl, nil
 }
 
@@ -635,8 +636,15 @@ func (t Tuple) TupleLess(nbf *NomsBinFormat, otherTuple Tuple) (bool, error) {
 			dec.offset += 1
 			otherDec.offset += 1
 
-		case StringKind, InlineBlobKind:
+		case StringKind:
 			size, otherSize := uint32(dec.readCount()), uint32(otherDec.readCount())
+			start, otherStart := dec.offset, otherDec.offset
+			dec.offset += size
+			otherDec.offset += otherSize
+			res = bytes.Compare(dec.buff[start:dec.offset], otherDec.buff[otherStart:otherDec.offset])
+
+		case InlineBlobKind:
+			size, otherSize := uint32(dec.readUint16()), uint32(otherDec.readUint16())
 			start, otherStart := dec.offset, otherDec.offset
 			dec.offset += size
 			otherDec.offset += otherSize
@@ -711,6 +719,24 @@ func (t Tuple) TupleLess(nbf *NomsBinFormat, otherTuple Tuple) (bool, error) {
 				continue
 			} else {
 				return tm.Before(otherTm), nil
+			}
+
+		case BlobKind:
+			// readValue expects the Kind to still be there, so we put it back by decrementing the offset
+			dec.offset--
+			otherDec.offset--
+			v, err := dec.readValue(nbf)
+			if err != nil {
+				return false, err
+			}
+			otherV, err := otherDec.readValue(nbf)
+			if err != nil {
+				return false, err
+			}
+			if v.Equals(otherV) {
+				continue
+			} else {
+				return v.Less(nbf, otherV)
 			}
 
 		default:

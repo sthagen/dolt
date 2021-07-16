@@ -24,13 +24,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
-	"github.com/dolthub/dolt/go/cmd/dolt/commands"
+	cmd "github.com/dolthub/dolt/go/cmd/dolt/commands"
 	"github.com/dolthub/dolt/go/libraries/doltcore/dtestutils"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
 )
 
 func TestHistoryTable(t *testing.T) {
+	SkipByDefaultInCI(t)
 	dEnv := setupHistoryTests(t)
 	for _, test := range historyTableTests() {
 		t.Run(test.name, func(t *testing.T) {
@@ -41,36 +42,38 @@ func TestHistoryTable(t *testing.T) {
 
 type historyTableTest struct {
 	name  string
-	query string
 	setup []testCommand
+	query string
 	rows  []sql.Row
 }
 
 type testCommand struct {
 	cmd  cli.Command
-	args []string
+	args args
 }
 
+type args []string
+
 var setupCommon = []testCommand{
-	{commands.SqlCmd{}, []string{"-q", "create table test (" +
+	{cmd.SqlCmd{}, args{"-q", "create table test (" +
 		"pk int not null primary key," +
 		"c0 int);"}},
-	{commands.AddCmd{}, []string{"."}},
-	{commands.CommitCmd{}, []string{"-m", "first"}},
-	{commands.SqlCmd{}, []string{"-q", "insert into test values " +
+	{cmd.AddCmd{}, args{"."}},
+	{cmd.CommitCmd{}, args{"-m", "first"}},
+	{cmd.SqlCmd{}, args{"-q", "insert into test values " +
 		"(0,0)," +
 		"(1,1);"}},
-	{commands.AddCmd{}, []string{"."}},
-	{commands.CommitCmd{}, []string{"-m", "second"}},
-	{commands.SqlCmd{}, []string{"-q", "insert into test values " +
+	{cmd.AddCmd{}, args{"."}},
+	{cmd.CommitCmd{}, args{"-m", "second"}},
+	{cmd.SqlCmd{}, args{"-q", "insert into test values " +
 		"(2,2)," +
 		"(3,3);"}},
-	{commands.AddCmd{}, []string{"."}},
-	{commands.CommitCmd{}, []string{"-m", "third"}},
-	{commands.SqlCmd{}, []string{"-q", "update test set c0 = c0+10 where c0 % 2 = 0"}},
-	{commands.AddCmd{}, []string{"."}},
-	{commands.CommitCmd{}, []string{"-m", "fourth"}},
-	{commands.LogCmd{}, []string{}},
+	{cmd.AddCmd{}, args{"."}},
+	{cmd.CommitCmd{}, args{"-m", "third"}},
+	{cmd.SqlCmd{}, args{"-q", "update test set c0 = c0+10 where c0 % 2 = 0"}},
+	{cmd.AddCmd{}, args{"."}},
+	{cmd.CommitCmd{}, args{"-m", "fourth"}},
+	{cmd.LogCmd{}, args{}},
 }
 
 func historyTableTests() []historyTableTest {
@@ -209,7 +212,7 @@ func setupHistoryTests(t *testing.T) *env.DoltEnv {
 
 	// get commit hashes from the log table
 	q := "select commit_hash, date from dolt_log order by date desc;"
-	rows, err := sqle.ExecuteSelect(dEnv, dEnv.DoltDB, root, q)
+	rows, err := sqle.ExecuteSelect(t, dEnv, dEnv.DoltDB, root, q)
 	require.NoError(t, err)
 	require.Equal(t, 5, len(rows))
 	HEAD = rows[0][0].(string)
@@ -231,7 +234,7 @@ func testHistoryTable(t *testing.T, test historyTableTest, dEnv *env.DoltEnv) {
 	root, err := dEnv.WorkingRoot(ctx)
 	require.NoError(t, err)
 
-	actRows, err := sqle.ExecuteSelect(dEnv, dEnv.DoltDB, root, test.query)
+	actRows, err := sqle.ExecuteSelect(t, dEnv, dEnv.DoltDB, root, test.query)
 	require.NoError(t, err)
 
 	require.Equal(t, len(test.rows), len(actRows))

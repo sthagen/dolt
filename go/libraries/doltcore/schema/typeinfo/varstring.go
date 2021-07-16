@@ -57,6 +57,10 @@ func CreateVarStringTypeFromParams(params map[string]string) (TypeInfo, error) {
 	}
 	if maxLengthStr, ok := params[varStringTypeParam_Length]; ok {
 		length, err = strconv.ParseInt(maxLengthStr, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+
 	} else {
 		return nil, fmt.Errorf(`create varstring type info is missing param "%v"`, varStringTypeParam_Length)
 	}
@@ -144,7 +148,7 @@ func (ti *varStringType) Equals(other TypeInfo) bool {
 	if ti2, ok := other.(*varStringType); ok {
 		return ti.sqlStringType.MaxCharacterLength() == ti2.sqlStringType.MaxCharacterLength() &&
 			ti.sqlStringType.Type() == ti2.sqlStringType.Type() &&
-			ti.sqlStringType.Collation() == ti2.sqlStringType.Collation()
+			ti.sqlStringType.Collation().Equals(ti2.sqlStringType.Collation())
 	}
 	return false
 }
@@ -263,6 +267,8 @@ func varStringTypeConverter(ctx context.Context, src *varStringType, destTi Type
 	case *inlineBlobType:
 		return wrapConvertValueToNomsValue(dest.ConvertValueToNomsValue)
 	case *intType:
+		return wrapConvertValueToNomsValue(dest.ConvertValueToNomsValue)
+	case *jsonType:
 		return wrapConvertValueToNomsValue(dest.ConvertValueToNomsValue)
 	case *setType:
 		return wrapConvertValueToNomsValue(dest.ConvertValueToNomsValue)

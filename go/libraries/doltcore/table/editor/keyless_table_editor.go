@@ -36,7 +36,8 @@ type keylessTableEditor struct {
 	sch  schema.Schema
 	name string
 
-	acc keylessEditAcc
+	acc      keylessEditAcc
+	cvEditor *types.MapEditor
 
 	eg *errgroup.Group
 	mu *sync.Mutex
@@ -133,12 +134,12 @@ func newKeylessTableEditor(ctx context.Context, tbl *doltdb.Table, sch schema.Sc
 	return te, nil
 }
 
-func (kte *keylessTableEditor) InsertKeyVal(ctx context.Context, key, val types.Tuple, tagToVal map[uint64]types.Value) error {
+func (kte *keylessTableEditor) InsertKeyVal(ctx context.Context, key, val types.Tuple, tagToVal map[uint64]types.Value, errFunc PKDuplicateErrFunc) error {
 	panic("not implemented")
 }
 
 // InsertRow implements TableEditor.
-func (kte *keylessTableEditor) InsertRow(ctx context.Context, r row.Row) (err error) {
+func (kte *keylessTableEditor) InsertRow(ctx context.Context, r row.Row, _ PKDuplicateErrFunc) (err error) {
 	kte.mu.Lock()
 	defer kte.mu.Unlock()
 
@@ -170,7 +171,7 @@ func (kte *keylessTableEditor) DeleteRow(ctx context.Context, r row.Row) (err er
 }
 
 // UpdateRow implements TableEditor.
-func (kte *keylessTableEditor) UpdateRow(ctx context.Context, old row.Row, new row.Row) (err error) {
+func (kte *keylessTableEditor) UpdateRow(ctx context.Context, old row.Row, new row.Row, _ PKDuplicateErrFunc) (err error) {
 	kte.mu.Lock()
 	defer kte.mu.Unlock()
 
@@ -236,6 +237,34 @@ func (kte *keylessTableEditor) Name() string {
 // Format implements TableEditor.
 func (kte *keylessTableEditor) Format() *types.NomsBinFormat {
 	return kte.tbl.Format()
+}
+
+// ValueReadWriter implements TableEditor.
+func (kte *keylessTableEditor) ValueReadWriter() types.ValueReadWriter {
+	return kte.tbl.ValueReadWriter()
+}
+
+// StatementStarted implements TableEditor.
+func (kte *keylessTableEditor) StatementStarted(ctx context.Context) {}
+
+// StatementFinished implements TableEditor.
+func (kte *keylessTableEditor) StatementFinished(ctx context.Context, errored bool) error {
+	return nil
+}
+
+// SetConstraintViolation implements TableEditor.
+func (kte *keylessTableEditor) SetConstraintViolation(ctx context.Context, k types.LesserValuable, v types.Valuable) error {
+	if kte.cvEditor == nil {
+		cvMap, err := kte.tbl.GetConstraintViolations(ctx)
+		if err != nil {
+			return err
+		}
+		kte.cvEditor = cvMap.Edit()
+	}
+	kte.mu.Lock()
+	defer kte.mu.Unlock()
+	kte.cvEditor.Set(k, v)
+	return nil
 }
 
 // Close implements TableEditor.

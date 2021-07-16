@@ -70,7 +70,7 @@ func (cmd PullCmd) EventType() eventsapi.ClientEventType {
 func (cmd PullCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cmd.createArgParser()
 	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, pullDocs, ap))
-	apr := cli.ParseArgs(ap, args, help)
+	apr := cli.ParseArgsOrDie(ap, args, help)
 
 	verr := pullFromRemote(ctx, dEnv, apr)
 
@@ -82,7 +82,7 @@ func pullFromRemote(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPa
 		return errhand.BuildDError("dolt pull takes at most one arg").SetPrintUsage().Build()
 	}
 
-	branch := dEnv.RepoState.CWBHeadRef()
+	branch := dEnv.RepoStateReader().CWBHeadRef()
 
 	var remoteName string
 	if apr.NArg() == 1 {
@@ -128,7 +128,7 @@ func pullFromRemote(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPa
 }
 
 func pullRemoteBranch(ctx context.Context, apr *argparser.ArgParseResults, dEnv *env.DoltEnv, r env.Remote, srcRef, destRef ref.DoltRef) errhand.VerboseError {
-	srcDB, err := r.GetRemoteDB(ctx, dEnv.DoltDB.ValueReadWriter().Format())
+	srcDB, err := r.GetRemoteDBWithoutCaching(ctx, dEnv.DoltDB.ValueReadWriter().Format())
 
 	if err != nil {
 		return errhand.BuildDError("error: failed to get remote db").AddCause(err).Build()

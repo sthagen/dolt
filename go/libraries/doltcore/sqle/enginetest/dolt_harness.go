@@ -28,13 +28,18 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dfunctions"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/globalstate"
 )
 
 type DoltHarness struct {
-	t           *testing.T
-	session     *sqle.DoltSession
-	mrEnv       env.MultiRepoEnv
-	parallelism int
+	t                    *testing.T
+	env                  *env.DoltEnv
+	session              *dsess.Session
+	databases            []sqle.Database
+	databaseGlobalStates []globalstate.GlobalState
+	parallelism          int
+	skippedQueries       []string
 }
 
 var _ enginetest.Harness = (*DoltHarness)(nil)
@@ -43,41 +48,51 @@ var _ enginetest.IndexHarness = (*DoltHarness)(nil)
 var _ enginetest.VersionedDBHarness = (*DoltHarness)(nil)
 var _ enginetest.ForeignKeyHarness = (*DoltHarness)(nil)
 var _ enginetest.KeylessTableHarness = (*DoltHarness)(nil)
+var _ enginetest.ReadOnlyDatabaseHarness = (*DoltHarness)(nil)
 
 func newDoltHarness(t *testing.T) *DoltHarness {
-	session, err := sqle.NewDoltSession(context.Background(), enginetest.NewBaseSession(), "test", "email@test.com")
+	session, err := dsess.NewSession(sql.NewEmptyContext(), enginetest.NewBaseSession(), "test", "email@test.com")
 	require.NoError(t, err)
 	return &DoltHarness{
-		t:       t,
-		session: session,
-		mrEnv:   make(env.MultiRepoEnv),
+		t:              t,
+		session:        session,
+		skippedQueries: defaultSkippedQueries,
 	}
+}
+
+var defaultSkippedQueries = []string{
+	"show variables",           // we set extra variables
+	"show create table fk_tbl", // we create an extra key for the FK that vanilla gms does not
+	"show indexes from",        // we create / expose extra indexes (for foreign keys)
+	"json_arrayagg",            // TODO: aggregation ordering
+	"json_objectagg",           // TODO: aggregation ordering
+	"typestable",               // Bit type isn't working?
+	"dolt_commit_diff_",        // see broken queries in `dolt_system_table_queries.go`
 }
 
 // WithParallelism returns a copy of the harness with parallelism set to the given number of threads. A value of 0 or
 // less means to use the system parallelism settings.
-func (d *DoltHarness) WithParallelism(parallelism int) *DoltHarness {
-	nd := *d
-	nd.parallelism = parallelism
-	return &nd
+func (d DoltHarness) WithParallelism(parallelism int) *DoltHarness {
+	d.parallelism = parallelism
+	return &d
 }
 
-// Logic to skip unsupported queries
+// WithSkippedQueries returns a copy of the harness with the given queries skipped
+func (d DoltHarness) WithSkippedQueries(queries []string) *DoltHarness {
+	d.skippedQueries = queries
+	return &d
+}
+
+// SkipQueryTest returns whether to skip a query
 func (d *DoltHarness) SkipQueryTest(query string) bool {
 	lowerQuery := strings.ToLower(query)
-	return strings.Contains(lowerQuery, "typestable") || // we don't support all the required types
-		strings.Contains(lowerQuery, "show full columns") || // we set extra comment info
-		lowerQuery == "show variables" || // we set extra variables
-		strings.Contains(lowerQuery, "show create table") || // we set extra comment info
-		strings.Contains(lowerQuery, "show indexes from") || // we create / expose extra indexes (for foreign keys)
-		query == `SELECT i FROM mytable mt 
-						 WHERE (SELECT i FROM mytable where i = mt.i and i > 2) IS NOT NULL
-						 AND (SELECT i2 FROM othertable where i2 = i) IS NOT NULL
-						 ORDER BY i` || // broken for unknown reasons
-		query == `SELECT i FROM mytable mt 
-						 WHERE (SELECT i FROM mytable where i = mt.i and i > 1) IS NOT NULL
-						 AND (SELECT i2 FROM othertable where i2 = i and i < 3) IS NOT NULL
-						 ORDER BY i` // broken for unknown reasons
+	for _, skipped := range d.skippedQueries {
+		if strings.Contains(lowerQuery, strings.ToLower(skipped)) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (d *DoltHarness) Parallelism() int {
@@ -99,9 +114,24 @@ func (d *DoltHarness) Parallelism() int {
 func (d *DoltHarness) NewContext() *sql.Context {
 	return sql.NewContext(
 		context.Background(),
-		sql.WithSession(d.session),
-		sql.WithViewRegistry(sql.NewViewRegistry()),
-	)
+		sql.WithSession(d.session))
+}
+
+func (d DoltHarness) NewSession() *sql.Context {
+	session, err := dsess.NewSession(sql.NewEmptyContext(), enginetest.NewBaseSession(), "test", "email@test.com")
+	require.NoError(d.t, err)
+
+	ctx := sql.NewContext(
+		context.Background(),
+		sql.WithSession(session))
+
+	for i, db := range d.databases {
+		dbState := getDbState(d.t, db, d.env, d.databaseGlobalStates[i])
+		err := session.AddDB(ctx, dbState)
+		require.NoError(d.t, err)
+	}
+
+	return ctx
 }
 
 func (d *DoltHarness) SupportsNativeIndexCreation() bool {
@@ -117,26 +147,75 @@ func (d *DoltHarness) SupportsKeylessTables() bool {
 }
 
 func (d *DoltHarness) NewDatabase(name string) sql.Database {
+	return d.NewDatabases(name)[0]
+}
+
+func (d *DoltHarness) NewDatabases(names ...string) []sql.Database {
 	dEnv := dtestutils.CreateTestEnv()
-	root, err := dEnv.WorkingRoot(enginetest.NewContext(d))
+	d.env = dEnv
+
+	// TODO: it should be safe to reuse a session with a new database, but it isn't in all cases. Particularly, if you
+	//  have a database that only ever receives read queries, and then you re-use its session for a new database with
+	//  the same name, the first write query will panic on dangling references in the noms layer. Not sure why this is
+	//  happening, but it only happens as a result of this test setup.
+	var err error
+	d.session, err = dsess.NewSession(sql.NewEmptyContext(), enginetest.NewBaseSession(), "test", "email@test.com")
 	require.NoError(d.t, err)
 
-	d.mrEnv.AddEnv(name, dEnv)
-	db := sqle.NewDatabase(name, dEnv.DbData())
-	require.NoError(d.t, d.session.AddDB(enginetest.NewContext(d), db))
-	require.NoError(d.t, db.SetRoot(enginetest.NewContext(d).WithCurrentDB(db.Name()), root))
-	return db
+	var dbs []sql.Database
+	d.databases = nil
+	d.databaseGlobalStates = nil
+	for _, name := range names {
+		db := sqle.NewDatabase(name, dEnv.DbData())
+		globalState := globalstate.NewGlobalStateStore()
+		dbState := getDbState(d.t, db, dEnv, globalState)
+		require.NoError(d.t, d.session.AddDB(enginetest.NewContext(d), dbState))
+		dbs = append(dbs, db)
+		d.databases = append(d.databases, db)
+		d.databaseGlobalStates = append(d.databaseGlobalStates, globalState)
+	}
+
+	return dbs
+}
+
+func (d *DoltHarness) NewReadOnlyDatabases(names ...string) (dbs []sql.ReadOnlyDatabase) {
+	for _, db := range d.NewDatabases(names...) {
+		dbs = append(dbs, sqle.ReadOnlyDatabase{Database: db.(sqle.Database)})
+	}
+	return
+}
+
+func getDbState(t *testing.T, db sqle.Database, dEnv *env.DoltEnv, globalState globalstate.GlobalState) dsess.InitialDbState {
+	ctx := context.Background()
+
+	head := dEnv.RepoStateReader().CWBHeadSpec()
+	headCommit, err := dEnv.DoltDB.Resolve(ctx, head, dEnv.RepoStateReader().CWBHeadRef())
+	require.NoError(t, err)
+
+	ws, err := dEnv.WorkingSet(ctx)
+	require.NoError(t, err)
+
+	return dsess.InitialDbState{
+		Db:          db,
+		HeadCommit:  headCommit,
+		WorkingSet:  ws,
+		DbData:      dEnv.DbData(),
+		GlobalState: globalState,
+	}
 }
 
 func (d *DoltHarness) NewTable(db sql.Database, name string, schema sql.Schema) (sql.Table, error) {
-	doltDatabase := db.(sqle.Database)
-	err := doltDatabase.CreateTable(enginetest.NewContext(d).WithCurrentDB(db.Name()), name, schema)
+	var err error
+	if ro, ok := db.(sqle.ReadOnlyDatabase); ok {
+		err = ro.CreateTable(enginetest.NewContext(d).WithCurrentDB(db.Name()), name, schema)
+	} else {
+		err = db.(sqle.Database).CreateTable(enginetest.NewContext(d).WithCurrentDB(db.Name()), name, schema)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	table, ok, err := doltDatabase.GetTableInsensitive(enginetest.NewContext(d).WithCurrentDB(db.Name()), name)
-
+	table, ok, err := db.GetTableInsensitive(enginetest.NewContext(d).WithCurrentDB(db.Name()), name)
 	require.NoError(d.t, err)
 	require.True(d.t, ok, "table %s not found after creation", name)
 	return table, nil
@@ -160,7 +239,16 @@ func (d *DoltHarness) NewTableAsOf(db sql.VersionedDatabase, name string, schema
 // Dolt doesn't version tables per se, just the entire database. So ignore the name and schema and just create a new
 // branch with the given name.
 func (d *DoltHarness) SnapshotTable(db sql.VersionedDatabase, name string, asOf interface{}) error {
-	ddb := db.(sqle.Database)
+	switch db.(type) {
+	case sqle.ReadOnlyDatabase:
+		// TODO: insert query to dolt_branches table (below)
+		// can't be performed against ReadOnlyDatabase
+		d.t.Skip("can't create SnaphotTables for ReadOnlyDatabases")
+	case sqle.Database:
+	default:
+		panic("not a Dolt SQL Database")
+	}
+
 	e := enginetest.NewEngineWithDbs(d.t, d, []sql.Database{db}, nil)
 
 	if _, err := e.Catalog.FunctionRegistry.Function(dfunctions.CommitFuncName); sql.ErrFunctionNotFound.Is(err) {
@@ -170,16 +258,25 @@ func (d *DoltHarness) SnapshotTable(db sql.VersionedDatabase, name string, asOf 
 
 	asOfString, ok := asOf.(string)
 	require.True(d.t, ok)
+
 	ctx := enginetest.NewContext(d)
 	_, iter, err := e.Query(ctx,
-		"set @@"+ddb.HeadKey()+" = COMMIT('-m', 'test commit');")
+		"set @@"+dsess.HeadKey(db.Name())+" = COMMIT('-m', 'test commit');")
 	require.NoError(d.t, err)
 	_, err = sql.RowIterToRows(ctx, iter)
 	require.NoError(d.t, err)
 
+	headHash, err := ctx.GetSessionVariable(ctx, dsess.HeadKey(db.Name()))
+	require.NoError(d.t, err)
+
 	ctx = enginetest.NewContext(d)
+	// TODO: there's a bug in test setup with transactions, where the HEAD session var gets overwritten on transaction
+	//  start, so we quote it here instead
+	// query := "insert into dolt_branches (name, hash) values ('" + asOfString + "', @@" + dsess.HeadKey(ddb.Name()) + ")"
+	query := "insert into dolt_branches (name, hash) values ('" + asOfString + "', '" + headHash.(string) + "')"
+
 	_, iter, err = e.Query(ctx,
-		"insert into dolt_branches (name, hash) values ('"+asOfString+"', @@"+ddb.HeadKey()+")")
+		query)
 	require.NoError(d.t, err)
 	_, err = sql.RowIterToRows(ctx, iter)
 	require.NoError(d.t, err)

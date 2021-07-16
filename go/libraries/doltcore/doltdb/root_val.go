@@ -15,6 +15,7 @@
 package doltdb
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -40,7 +41,7 @@ type FeatureVersion int64
 
 // DoltFeatureVersion is described in feature_version.md.
 // only variable for testing.
-var DoltFeatureVersion FeatureVersion = 0
+var DoltFeatureVersion FeatureVersion = 1 // last bumped for CHECK constraint storage
 
 // RootValue defines the structure used inside all Dolthub noms dbs
 type RootValue struct {
@@ -67,7 +68,7 @@ func newRootValue(vrw types.ValueReadWriter, st types.Struct) (*RootValue, error
 	return &RootValue{vrw, st, nil}, nil
 }
 
-func emptyRootValue(ctx context.Context, vrw types.ValueReadWriter) (*RootValue, error) {
+func EmptyRootValue(ctx context.Context, vrw types.ValueReadWriter) (*RootValue, error) {
 	empty, err := types.NewMap(ctx, vrw)
 	if err != nil {
 		return nil, err
@@ -140,7 +141,6 @@ func (root *RootValue) GetSuperSchema(ctx context.Context, tName string) (*schem
 	}
 
 	t, tblFound, err := root.GetTable(ctx, tName)
-
 	if err != nil {
 		return nil, false, err
 	}
@@ -152,13 +152,11 @@ func (root *RootValue) GetSuperSchema(ctx context.Context, tName string) (*schem
 
 	if tblFound {
 		sch, err := t.GetSchema(ctx)
-
 		if err != nil {
 			return nil, false, err
 		}
 
 		err = ss.AddSchemas(sch)
-
 		if err != nil {
 			return nil, false, err
 		}
@@ -176,7 +174,7 @@ func (root *RootValue) GenerateTagsForNewColColl(ctx context.Context, tableName 
 		return false, nil
 	})
 
-	newTags, err := root.GenerateTagsForNewColumns(ctx, tableName, newColNames, newColKinds)
+	newTags, err := root.GenerateTagsForNewColumns(ctx, tableName, newColNames, newColKinds, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -191,9 +189,32 @@ func (root *RootValue) GenerateTagsForNewColColl(ctx context.Context, tableName 
 
 // GenerateTagsForNewColumns deterministically generates a slice of new tags that are unique within the history of this root. The names and NomsKinds of
 // the new columns are used to see the tag generator.
-func (root *RootValue) GenerateTagsForNewColumns(ctx context.Context, tableName string, newColNames []string, newColKinds []types.NomsKind) ([]uint64, error) {
+func (root *RootValue) GenerateTagsForNewColumns(ctx context.Context, tableName string, newColNames []string, newColKinds []types.NomsKind, headRoot *RootValue) ([]uint64, error) {
 	if len(newColNames) != len(newColKinds) {
 		return nil, fmt.Errorf("error generating tags, newColNames and newColKinds must be of equal length")
+	}
+
+	if headRoot != nil {
+		tbl, found, err := headRoot.GetTable(ctx, tableName)
+		if err != nil {
+			return nil, err
+		}
+
+		if found {
+			sch, err := tbl.GetSchema(ctx)
+			if err != nil {
+				return nil, err
+			}
+
+			colOverlap := schema.GetSharedCols(sch, newColNames, newColKinds)
+			if len(colOverlap) == len(newColNames) {
+				var reusedTags []uint64
+				for _, k := range newColNames {
+					reusedTags = append(reusedTags, colOverlap[k])
+				}
+				return reusedTags, nil
+			}
+		}
 	}
 
 	rootSuperSchema, err := GetRootValueSuperSchema(ctx, root)
@@ -237,13 +258,11 @@ func (root *RootValue) GetSuperSchemaMap(ctx context.Context) (types.Map, error)
 // SuperSchemas are only persisted on commit.
 func (root *RootValue) getSuperSchemaAtLastCommit(ctx context.Context, tName string) (*schema.SuperSchema, bool, error) {
 	ssm, err := root.getOrCreateSuperSchemaMap(ctx)
-
 	if err != nil {
 		return nil, false, err
 	}
 
 	v, found, err := ssm.MaybeGet(ctx, types.String(tName))
-
 	if err != nil {
 		return nil, false, err
 	}
@@ -254,13 +273,11 @@ func (root *RootValue) getSuperSchemaAtLastCommit(ctx context.Context, tName str
 
 	ssValRef := v.(types.Ref)
 	ssVal, err := ssValRef.TargetValue(ctx, root.vrw)
-
 	if err != nil {
 		return nil, false, err
 	}
 
 	ss, err := encoding.UnmarshalSuperSchemaNomsValue(ctx, root.vrw.Format(), ssVal)
-
 	if err != nil {
 		return nil, false, err
 	}
@@ -281,7 +298,7 @@ func (root *RootValue) getOrCreateSuperSchemaMap(ctx context.Context) (types.Map
 	} else {
 		ssm, err = types.NewMap(ctx, root.vrw)
 	}
-	return ssm, nil
+	return ssm, err
 }
 
 func (root *RootValue) getTableSt(ctx context.Context, tName string) (*types.Struct, bool, error) {
@@ -292,6 +309,9 @@ func (root *RootValue) getTableSt(ctx context.Context, tName string) (*types.Str
 	}
 
 	tVal, found, err := tableMap.MaybeGet(ctx, types.String(tName))
+	if err != nil {
+		return nil, false, err
+	}
 
 	if tVal == nil || !found {
 		return nil, false, nil
@@ -299,7 +319,6 @@ func (root *RootValue) getTableSt(ctx context.Context, tName string) (*types.Str
 
 	tValRef := tVal.(types.Ref)
 	val, err := tValRef.TargetValue(ctx, root.vrw)
-
 	if err != nil {
 		return nil, false, err
 	}
@@ -324,12 +343,14 @@ func (root *RootValue) GetAllSchemas(ctx context.Context) (map[string]schema.Sch
 
 func (root *RootValue) GetTableHash(ctx context.Context, tName string) (hash.Hash, bool, error) {
 	tableMap, err := root.getTableMap()
-
 	if err != nil {
 		return hash.Hash{}, false, err
 	}
 
 	tVal, found, err := tableMap.MaybeGet(ctx, types.String(tName))
+	if err != nil {
+		return hash.Hash{}, false, err
+	}
 
 	if tVal == nil || !found {
 		return hash.Hash{}, false, nil
@@ -424,7 +445,7 @@ func (root *RootValue) GetTableByColTag(ctx context.Context, tag uint64) (tbl *T
 		return nil, "", false, err
 	}
 
-	_ = root.iterSuperSchemas(ctx, func(tn string, ss *schema.SuperSchema) (bool, error) {
+	err = root.iterSuperSchemas(ctx, func(tn string, ss *schema.SuperSchema) (bool, error) {
 		_, found = ss.GetByTag(tag)
 		if found {
 			name = tn
@@ -432,6 +453,9 @@ func (root *RootValue) GetTableByColTag(ctx context.Context, tag uint64) (tbl *T
 
 		return found, nil
 	})
+	if err != nil {
+		return nil, "", false, err
+	}
 
 	return tbl, name, found, nil
 }
@@ -509,6 +533,34 @@ func (root *RootValue) TablesInConflict(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
+// TablesWithConstraintViolations returns all tables that have constraint violations.
+func (root *RootValue) TablesWithConstraintViolations(ctx context.Context) ([]string, error) {
+	tableMap, err := root.getTableMap()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, tableMap.Len())
+
+	err = tableMap.Iter(ctx, func(key, tblRefVal types.Value) (stop bool, err error) {
+		tblVal, err := tblRefVal.(types.Ref).TargetValue(ctx, root.vrw)
+		if err != nil {
+			return false, err
+		}
+		tblSt := tblVal.(types.Struct)
+		tbl := &Table{root.vrw, tblSt}
+		if cvMap, err := tbl.GetConstraintViolations(ctx); err != nil {
+			return false, err
+		} else if !cvMap.Empty() {
+			names = append(names, string(key.(types.String)))
+		}
+		return false, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return names, nil
+}
+
 func (root *RootValue) HasConflicts(ctx context.Context) (bool, error) {
 	cnfTbls, err := root.TablesInConflict(ctx)
 
@@ -517,6 +569,15 @@ func (root *RootValue) HasConflicts(ctx context.Context) (bool, error) {
 	}
 
 	return len(cnfTbls) > 0, nil
+}
+
+// HasConstraintViolations returns whether any tables have constraint violations.
+func (root *RootValue) HasConstraintViolations(ctx context.Context) (bool, error) {
+	tbls, err := root.TablesWithConstraintViolations(ctx)
+	if err != nil {
+		return false, err
+	}
+	return len(tbls) > 0, nil
 }
 
 // IterTables calls the callback function cb on each table in this RootValue.
@@ -573,6 +634,9 @@ func (root *RootValue) iterSuperSchemas(ctx context.Context, cb func(name string
 
 		// use GetSuperSchema() to pickup uncommitted SuperSchemas
 		ss, _, err := root.GetSuperSchema(ctx, name)
+		if err != nil {
+			return false, err
+		}
 
 		return cb(name, ss)
 	})
@@ -1062,14 +1126,12 @@ func GetRootValueSuperSchema(ctx context.Context, root *RootValue) (*schema.Supe
 	}
 
 	rootSuperSchema, err := schema.SuperSchemaUnion(sss...)
-
 	if err != nil {
 		return nil, err
 	}
 
 	// super schemas are only persisted on commit, so add in working schemas
 	tblMap, err := root.getTableMap()
-
 	if err != nil {
 		return nil, err
 	}
@@ -1089,6 +1151,9 @@ func GetRootValueSuperSchema(ctx context.Context, root *RootValue) (*schema.Supe
 		}
 		return false, nil
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	return rootSuperSchema, nil
 }
@@ -1111,30 +1176,108 @@ func UnionTableNames(ctx context.Context, roots ...*RootValue) ([]string, error)
 
 // validateTagUniqueness checks for tag collisions between the given table and the set of tables in then given root.
 func validateTagUniqueness(ctx context.Context, root *RootValue, tableName string, table *Table) error {
+	prev, ok, err := root.GetTable(ctx, tableName)
+	if err != nil {
+		return err
+	}
+	if ok {
+		prevRef, err := prev.GetSchemaRef()
+		if err != nil {
+			return err
+		}
+
+		newRef, err := table.GetSchemaRef()
+		if err != nil {
+			return err
+		}
+
+		// short-circuit if schema unchanged
+		if prevRef.Equals(newRef) {
+			return nil
+		}
+	}
+
 	sch, err := table.GetSchema(ctx)
 	if err != nil {
 		return err
 	}
 
 	var ee []string
-	_ = root.iterSuperSchemas(ctx, func(tn string, ss *schema.SuperSchema) (stop bool, err error) {
+	err = root.iterSuperSchemas(ctx, func(tn string, ss *schema.SuperSchema) (stop bool, err error) {
 		if tn == tableName {
 			return false, nil
 		}
 
-		_ = sch.GetAllCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
+		err = sch.GetAllCols().Iter(func(tag uint64, col schema.Column) (stop bool, err error) {
 			_, ok := ss.GetByTag(tag)
 			if ok {
 				ee = append(ee, schema.ErrTagPrevUsed(tag, col.Name, tn).Error())
 			}
 			return false, nil
 		})
-		return false, nil
+		return false, err
 	})
+	if err != nil {
+		return err
+	}
 
 	if len(ee) > 0 {
 		return fmt.Errorf(strings.Join(ee, "\n"))
 	}
 
 	return nil
+}
+
+// DebugString returns a human readable string with the contents of this root. If |transitive| is true, row data from
+// all tables is also included. This method is very expensive for large root values, so |transitive| should only be used
+// when debugging tests.
+func (root *RootValue) DebugString(ctx context.Context, transitive bool) string {
+	var buf bytes.Buffer
+	err := types.WriteEncodedValue(ctx, &buf, root.valueSt)
+	if err != nil {
+		panic(err)
+	}
+
+	if transitive {
+		buf.WriteString("\nTables:")
+		root.IterTables(ctx, func(name string, table *Table, sch schema.Schema) (stop bool, err error) {
+			buf.WriteString("\nName:")
+			buf.WriteString(name)
+			buf.WriteString("\n")
+
+			buf.WriteString("Data:\n")
+			data, err := table.GetRowData(ctx)
+			if err != nil {
+				panic(err)
+			}
+
+			err = types.WriteEncodedValue(ctx, &buf, data)
+			if err != nil {
+				panic(err)
+			}
+			return false, nil
+		})
+	}
+
+	return buf.String()
+}
+
+// MapTableHashes returns a map of each table name and hash.
+func (root *RootValue) MapTableHashes(ctx context.Context) (map[string]hash.Hash, error) {
+	names, err := root.GetTableNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	nameToHash := make(map[string]hash.Hash)
+	for _, name := range names {
+		h, ok, err := root.GetTableHash(ctx, name)
+		if err != nil {
+			return nil, err
+		} else if !ok {
+			return nil, fmt.Errorf("root found a table with name '%s' but no hash", name)
+		} else {
+			nameToHash[name] = h
+		}
+	}
+	return nameToHash, nil
 }

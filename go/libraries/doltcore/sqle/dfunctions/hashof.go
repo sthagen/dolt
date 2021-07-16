@@ -25,7 +25,7 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 )
 
 const HashOfFuncName = "hashof"
@@ -35,7 +35,7 @@ type HashOf struct {
 }
 
 // NewHashOf creates a new HashOf expression.
-func NewHashOf(e sql.Expression) sql.Expression {
+func NewHashOf(ctx *sql.Context, e sql.Expression) sql.Expression {
 	return &HashOf{expression.UnaryExpression{Child: e}}
 }
 
@@ -58,44 +58,42 @@ func (t *HashOf) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	name, as, err := doltdb.SplitAncestorSpec(paramStr)
-
 	if err != nil {
 		return nil, err
 	}
 
 	dbName := ctx.GetCurrentDatabase()
-	ddb, ok := sqle.DSessFromSess(ctx.Session).GetDoltDB(dbName)
+	ddb, ok := dsess.DSessFromSess(ctx.Session).GetDoltDB(dbName)
 	if !ok {
 		return nil, sql.ErrDatabaseNotFound.New(dbName)
 	}
 
 	var cm *doltdb.Commit
 	if strings.ToUpper(name) == "HEAD" {
-		sess := sqle.DSessFromSess(ctx.Session)
+		sess := dsess.DSessFromSess(ctx.Session)
 
-		cm, _, err = sess.GetParentCommit(ctx, dbName)
+		cm, err = sess.GetHeadCommit(ctx, dbName)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		branchRef, err := getBranchInsensitive(ctx, name, ddb)
-
 		if err != nil {
 			return nil, err
 		}
 
-		cm, err = ddb.ResolveRef(ctx, branchRef)
-	}
-
-	if err != nil {
-		return nil, err
+		cm, err = ddb.ResolveCommitRef(ctx, branchRef)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	cm, err = cm.GetAncestor(ctx, as)
-
 	if err != nil {
 		return nil, err
 	}
 
 	h, err := cm.HashOf()
-
 	if err != nil {
 		return nil, err
 	}
@@ -130,11 +128,11 @@ func (t *HashOf) IsNullable() bool {
 }
 
 // WithChildren implements the Expression interface.
-func (t *HashOf) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (t *HashOf) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(t, len(children), 1)
 	}
-	return NewHashOf(children[0]), nil
+	return NewHashOf(ctx, children[0]), nil
 }
 
 // Type implements the Expression interface.

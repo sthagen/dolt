@@ -80,9 +80,10 @@ func TestLeastPermissiveNumericType(t *testing.T) {
 		{"zero float with floatThreshold of 0.1", "0.0", 0.1, typeinfo.Int32Type},
 		{"negative float", "-1.3451234", 0.0, typeinfo.Float32Type},
 		{"double decimal point", "0.00.0", 0.0, typeinfo.UnknownType},
+		{"leading zero floats", "05.78", 0.0, typeinfo.Float32Type},
 		{"zero float with high precision", "0.0000", 0.0, typeinfo.Float32Type},
-		{"all zeroes", "0000", 0.0, typeinfo.Uint32Type},
-		{"leading zeroes", "01", 0.0, typeinfo.Uint32Type},
+		{"all zeroes", "0000", 0.0, typeinfo.StringDefaultType},
+		{"leading zeroes", "01", 0.0, typeinfo.StringDefaultType},
 		{"negative int", "-1234", 0.0, typeinfo.Int32Type},
 		{"fits in uint64 but not int64", strconv.FormatUint(math.MaxUint64, 10), 0.0, typeinfo.Uint64Type},
 		{"negative less than math.MinInt64", "-" + strconv.FormatUint(math.MaxUint64, 10), 0.0, typeinfo.UnknownType},
@@ -494,7 +495,7 @@ func TestInferSchema(t *testing.T) {
 				assert.Equal(t, expectedType, col.TypeInfo, "column: %s - expected: %s got: %s", col.Name, expectedType.String(), col.TypeInfo.String())
 				return false, nil
 			})
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			if test.nullableCols == nil {
 				test.nullableCols = set.NewStrSet(nil)
@@ -505,7 +506,7 @@ func TestInferSchema(t *testing.T) {
 				assert.True(t, idx == -1 == test.nullableCols.Contains(col.Name), "%s unexpected nullability", col.Name)
 				return false, nil
 			})
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		})
 	}
 }

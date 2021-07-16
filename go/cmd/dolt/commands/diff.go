@@ -152,7 +152,7 @@ func (cmd DiffCmd) createArgParser() *argparser.ArgParser {
 func (cmd DiffCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cmd.createArgParser()
 	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, diffDocs, ap))
-	apr := cli.ParseArgs(ap, args, help)
+	apr := cli.ParseArgsOrDie(ap, args, help)
 
 	fromRoot, toRoot, dArgs, err := parseDiffArgs(ctx, dEnv, apr)
 
@@ -282,9 +282,16 @@ func parseDiffArgs(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.ArgPar
 
 func getDiffRoots(ctx context.Context, dEnv *env.DoltEnv, args []string, isCached bool) (from, to *doltdb.RootValue, leftover []string, err error) {
 	headRoot, err := dEnv.HeadRoot(ctx)
-	stagedRoot, err := dEnv.StagedRoot(ctx)
-	workingRoot, err := dEnv.WorkingRoot(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 
+	stagedRoot, err := dEnv.StagedRoot(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	workingRoot, err := dEnv.WorkingRoot(ctx)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -357,7 +364,7 @@ func maybeResolve(ctx context.Context, dEnv *env.DoltEnv, spec string) (*doltdb.
 		return nil, false
 	}
 
-	cm, err := dEnv.DoltDB.Resolve(ctx, cs, dEnv.RepoState.CWBHeadRef())
+	cm, err := dEnv.DoltDB.Resolve(ctx, cs, dEnv.RepoStateReader().CWBHeadRef())
 	if err != nil {
 		return nil, false
 	}
@@ -519,7 +526,8 @@ func tabularSchemaDiff(ctx context.Context, td diff.TableDelta, fromSchemas, toS
 	}
 
 	if !schema.ColCollsAreCompatible(fromSch.GetPKCols(), toSch.GetPKCols()) {
-		panic("primary key sets must be the same")
+		pkSetVErr := errhand.BuildDError("cannot diff tables with different primary key sets").Build()
+		return errhand.VerboseError(pkSetVErr)
 	}
 	pkStr := strings.Join(fromSch.GetPKCols().GetColumnNames(), ", ")
 	cli.Print(sqlfmt.FmtColPrimaryKey(4, pkStr))
@@ -867,7 +875,7 @@ func createSplitter(ctx context.Context, vrw types.ValueReadWriter, fromSch sche
 
 		unionSch, err = untyped.UntypedSchemaUnion(dumbNewSch, dumbOldSch)
 		if err != nil {
-			return nil, nil, errhand.BuildDError("Failed to merge schemas").AddCause(err).Build()
+			return nil, nil, errhand.BuildDError("Merge failed. Tables with different primary keys cannot be merged.").AddCause(err).Build()
 		}
 
 	} else {

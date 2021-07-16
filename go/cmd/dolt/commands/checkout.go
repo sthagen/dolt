@@ -76,7 +76,7 @@ func (cmd CheckoutCmd) EventType() eventsapi.ClientEventType {
 func (cmd CheckoutCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cli.CreateCheckoutArgParser()
 	helpPrt, usagePrt := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, checkoutDocs, ap))
-	apr := cli.ParseArgs(ap, args, helpPrt)
+	apr := cli.ParseArgsOrDie(ap, args, helpPrt)
 
 	if (apr.Contains(cli.CheckoutCoBranch) && apr.NArg() > 1) || (!apr.Contains(cli.CheckoutCoBranch) && apr.NArg() == 0) {
 		usagePrt()
@@ -111,6 +111,16 @@ func (cmd CheckoutCmd) Exec(ctx context.Context, commandStr string, args []strin
 	} else if isBranch {
 		verr := checkoutBranch(ctx, dEnv, name)
 		return HandleVErrAndExitCode(verr, usagePrt)
+	}
+
+	// Check if the user executed `dolt checkout .`
+	if apr.NArg() == 1 && name == "." {
+		roots, err := dEnv.Roots(ctx)
+		if err != nil {
+			return HandleVErrAndExitCode(errhand.BuildDError(err.Error()).Build(), usagePrt)
+		}
+		verr := actions.ResetHard(ctx, dEnv, "HEAD", roots)
+		return handleResetError(verr, usagePrt)
 	}
 
 	tbls, docs, err := actions.GetTablesOrDocs(dEnv.DocsReadWriter(), args)
@@ -165,7 +175,12 @@ func checkoutNewBranch(ctx context.Context, dEnv *env.DoltEnv, newBranch string,
 }
 
 func checkoutTablesAndDocs(ctx context.Context, dEnv *env.DoltEnv, tables []string, docs doltdocs.Docs) errhand.VerboseError {
-	err := actions.CheckoutTablesAndDocs(ctx, dEnv.DbData(), tables, docs)
+	roots, err := dEnv.Roots(ctx)
+	if err != nil {
+		return errhand.VerboseErrorFromError(err)
+	}
+
+	err = actions.CheckoutTablesAndDocs(ctx, roots, dEnv.DbData(), tables, docs)
 
 	if err != nil {
 		if doltdb.IsRootValUnreachable(err) {
@@ -206,7 +221,9 @@ func checkoutBranch(ctx context.Context, dEnv *env.DoltEnv, name string) errhand
 			bdr.AddDetails("Aborting")
 			return bdr.Build()
 		} else if err == doltdb.ErrAlreadyOnBranch {
-			return errhand.BuildDError("Already on branch '%s'", name).Build()
+			// Being on the same branch shouldn't be an error
+			cli.Printf("Already on branch '%s'", name)
+			return nil
 		} else {
 			bdr := errhand.BuildDError("fatal: Unexpected error checking out branch '%s'", name)
 			bdr.AddCause(err)

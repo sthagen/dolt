@@ -21,9 +21,9 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
-	"github.com/dolthub/dolt/go/libraries/doltcore/env"
+	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/env/actions"
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 )
 
 const DoltResetFuncName = "dolt_reset"
@@ -39,7 +39,7 @@ func (d DoltResetFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) 
 		return 1, fmt.Errorf("Empty database name.")
 	}
 
-	dSess := sqle.DSessFromSess(ctx.Session)
+	dSess := dsess.DSessFromSess(ctx.Session)
 	dbData, ok := dSess.GetDbData(dbName)
 
 	if !ok {
@@ -53,7 +53,10 @@ func (d DoltResetFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) 
 		return 1, err
 	}
 
-	apr := cli.ParseArgs(ap, args, nil)
+	apr, err := ap.Parse(args)
+	if err != nil {
+		return 1, err
+	}
 
 	// Check if problems with args first.
 	if apr.ContainsAll(cli.HardResetParam, cli.SoftResetParam) {
@@ -61,42 +64,48 @@ func (d DoltResetFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) 
 	}
 
 	// Get all the needed roots.
-	working, staged, head, err := env.GetRoots(ctx, dbData.Ddb, dbData.Rsr)
-
-	if err != nil {
-		return 1, err
+	roots, ok := dSess.GetRoots(dbName)
+	if !ok {
+		return 1, fmt.Errorf("Could not load database %s", dbName)
 	}
 
 	if apr.Contains(cli.HardResetParam) {
-		h, err := actions.ResetHardTables(ctx, dbData, apr, working, staged, head)
+		// Get the commitSpec for the branch if it exists
+		arg := ""
+		if apr.NArg() > 1 {
+			return 1, fmt.Errorf("--hard supports at most one additional param")
+		} else if apr.NArg() == 1 {
+			arg = apr.Arg(0)
+		}
+
+		var newHead *doltdb.Commit
+		newHead, roots, err = actions.ResetHardTables(ctx, dbData, arg, roots)
 		if err != nil {
 			return 1, err
 		}
 
-		// In this case we preserve untracked tables.
-		if h == "" {
-			headHash, err := dbData.Rsr.CWBHeadHash(ctx)
-			if err != nil {
+		// TODO: this overrides the transaction setting, needs to happen at commit, not here
+		if newHead != nil {
+			if err := dbData.Ddb.SetHeadToCommit(ctx, dbData.Rsr.CWBHeadRef(), newHead); err != nil {
 				return 1, err
 			}
+		}
 
-			h = headHash.String()
-			err = setSessionRootExplicit(ctx, h, sqle.HeadKeySuffix)
-			if err != nil {
-				return 1, err
-			}
-
-			workingHash := dbData.Rsr.WorkingHash()
-			err = setSessionRootExplicit(ctx, workingHash.String(), sqle.WorkingKeySuffix)
-		} else {
-			err = setHeadAndWorkingSessionRoot(ctx, h)
+		ws := dSess.WorkingSet(ctx, dbName)
+		err = dSess.SetWorkingSet(ctx, dbName, ws.WithWorkingRoot(roots.Working).WithStagedRoot(roots.Staged), nil)
+		if err != nil {
+			return 1, err
 		}
 	} else {
-		_, err = actions.ResetSoftTables(ctx, dbData, apr, staged, head)
-	}
+		roots, err = actions.ResetSoftTables(ctx, dbData, apr, roots)
+		if err != nil {
+			return 1, err
+		}
 
-	if err != nil {
-		return 1, err
+		err = dSess.SetRoots(ctx, dbName, roots)
+		if err != nil {
+			return 1, err
+		}
 	}
 
 	return 0, nil
@@ -138,10 +147,10 @@ func (d DoltResetFunc) Children() []sql.Expression {
 	return d.children
 }
 
-func (d DoltResetFunc) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewDoltResetFunc(children...)
+func (d DoltResetFunc) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewDoltResetFunc(ctx, children...)
 }
 
-func NewDoltResetFunc(args ...sql.Expression) (sql.Expression, error) {
+func NewDoltResetFunc(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
 	return DoltResetFunc{children: args}, nil
 }

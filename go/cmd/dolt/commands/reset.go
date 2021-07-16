@@ -78,30 +78,52 @@ func (cmd ResetCmd) CreateMarkdown(fs filesys.Filesys, path, commandStr string) 
 func (cmd ResetCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cli.CreateResetArgParser()
 	help, usage := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, resetDocContent, ap))
-	apr := cli.ParseArgs(ap, args, help)
+	apr := cli.ParseArgsOrDie(ap, args, help)
 
 	if apr.ContainsArg(doltdb.DocTableName) {
 		return HandleDocTableVErrAndExitCode()
 	}
 
-	workingRoot, stagedRoot, headRoot, verr := getAllRoots(ctx, dEnv)
+	roots, err := dEnv.Roots(ctx)
+	if err != nil {
+		return HandleVErrAndExitCode(errhand.VerboseErrorFromError(err), usage)
+	}
 
-	var err error
-	if verr == nil {
-		if apr.ContainsAll(HardResetParam, SoftResetParam) {
-			verr = errhand.BuildDError("error: --%s and --%s are mutually exclusive options.", HardResetParam, SoftResetParam).Build()
-			HandleVErrAndExitCode(verr, usage)
-		} else if apr.Contains(HardResetParam) {
-			err = actions.ResetHard(ctx, dEnv, apr, workingRoot, stagedRoot, headRoot)
-		} else {
-			stagedRoot, err = actions.ResetSoft(ctx, dEnv.DbData(), apr, stagedRoot, headRoot)
+	if apr.ContainsAll(HardResetParam, SoftResetParam) {
+		verr := errhand.BuildDError("error: --%s and --%s are mutually exclusive options.", HardResetParam, SoftResetParam).Build()
+		HandleVErrAndExitCode(verr, usage)
+	} else if apr.Contains(HardResetParam) {
+		arg := ""
+		if apr.NArg() > 1 {
+			return handleResetError(fmt.Errorf("--hard supports at most one additional param"), usage)
+		} else if apr.NArg() == 1 {
+			arg = apr.Arg(0)
+		}
 
-			if err != nil {
+		err = actions.ResetHard(ctx, dEnv, arg, roots)
+	} else {
+		// Check whether the input argument is a ref.
+		if apr.NArg() == 1 {
+			argToCheck := apr.Arg(0)
+
+			ok := actions.ValidateIsRef(ctx, argToCheck, dEnv.DoltDB, dEnv.RepoStateReader())
+
+			// This is a valid ref
+			if ok {
+				err = actions.ResetSoftToRef(ctx, dEnv.DbData(), apr.Arg(0))
 				return handleResetError(err, usage)
 			}
-
-			printNotStaged(ctx, dEnv, stagedRoot)
 		}
+
+		tables := apr.Args()
+
+		roots.Staged, err = actions.ResetSoft(ctx, dEnv.DbData(), tables, roots)
+
+		if err != nil {
+			return handleResetError(err, usage)
+		}
+
+		printNotStaged(ctx, dEnv, roots.Staged)
 	}
 
 	return handleResetError(err, usage)
@@ -164,7 +186,12 @@ func printNotStaged(ctx context.Context, dEnv *env.DoltEnv, staged *doltdb.RootV
 func handleResetError(err error, usage cli.UsagePrinter) int {
 	if actions.IsTblNotExist(err) {
 		tbls := actions.GetTablesForError(err)
-		bdr := errhand.BuildDError("Invalid Table(s):")
+
+		// In case the ref does not exist.
+		bdr := errhand.BuildDError("Invalid Ref or Table:")
+		if len(tbls) > 1 {
+			bdr = errhand.BuildDError("Invalid Table(s):")
+		}
 
 		for _, tbl := range tbls {
 			bdr.AddDetails("\t" + tbl)

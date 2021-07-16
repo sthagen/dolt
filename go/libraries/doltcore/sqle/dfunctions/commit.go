@@ -22,7 +22,7 @@ import (
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 )
 
 const CommitFuncName = "commit"
@@ -32,19 +32,26 @@ type CommitFunc struct {
 }
 
 // NewCommitFunc creates a new CommitFunc expression.
-func NewCommitFunc(args ...sql.Expression) (sql.Expression, error) {
+func NewCommitFunc(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
 	return &CommitFunc{children: args}, nil
 }
 
 // Eval implements the Expression interface.
 func (cf *CommitFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	dbName := ctx.GetCurrentDatabase()
-	dSess := sqle.DSessFromSess(ctx.Session)
+	dSess := dsess.DSessFromSess(ctx.Session)
 
 	//  Get the params associated with COMMIT.
 	ap := cli.CreateCommitArgParser()
 	args, err := getDoltArgs(ctx, row, cf.Children())
-	apr := cli.ParseArgs(ap, args, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	apr, err := ap.Parse(args)
+	if err != nil {
+		return nil, err
+	}
 
 	var name, email string
 	if authorStr, ok := apr.GetValue(cli.AuthorParam); ok {
@@ -63,16 +70,25 @@ func (cf *CommitFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, fmt.Errorf("Must provide commit message.")
 	}
 
-	parent, _, err := dSess.GetParentCommit(ctx, dbName)
-
+	parent, err := dSess.GetHeadCommit(ctx, dbName)
 	if err != nil {
 		return nil, err
 	}
 
 	root, ok := dSess.GetRoot(dbName)
-
 	if !ok {
 		return nil, fmt.Errorf("unknown database '%s'", dbName)
+	}
+
+	// Update the superschema to with any new information from the table map.
+	tblNames, err := root.GetTableNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	root, err = root.UpdateSuperSchemasFromOther(ctx, tblNames, root)
+	if err != nil {
+		return nil, err
 	}
 
 	ddb, ok := dSess.GetDoltDB(dbName)
@@ -82,25 +98,21 @@ func (cf *CommitFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	h, err := ddb.WriteRootValue(ctx, root)
-
 	if err != nil {
 		return nil, err
 	}
 
 	meta, err := doltdb.NewCommitMeta(name, email, commitMessage)
-
 	if err != nil {
 		return nil, err
 	}
 
 	cm, err := ddb.CommitDanglingWithParentCommits(ctx, h, []*doltdb.Commit{parent}, meta)
-
 	if err != nil {
 		return nil, err
 	}
 
 	h, err = cm.HashOf()
-
 	if err != nil {
 		return nil, err
 	}
@@ -138,8 +150,8 @@ func (cf *CommitFunc) Children() []sql.Expression {
 }
 
 // WithChildren implements the Expression interface.
-func (cf *CommitFunc) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewCommitFunc(children...)
+func (cf *CommitFunc) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewCommitFunc(ctx, children...)
 }
 
 func (cf *CommitFunc) Type() sql.Type {

@@ -300,14 +300,18 @@ type TableFileStoreOps struct {
 
 // TableFileStore is an interface for interacting with table files directly
 type TableFileStore interface {
-	// Sources retrieves the current root hash, and a list of all the table files.
-	Sources(ctx context.Context) (hash.Hash, []TableFile, error)
+	// Sources retrieves the current root hash, a list of all the table files (which may include appendix table files),
+	// and a second list containing only appendix table files.
+	Sources(ctx context.Context) (hash.Hash, []TableFile, []TableFile, error)
 
 	// Size  returns the total size, in bytes, of the table files in this Store.
 	Size(ctx context.Context) (uint64, error)
 
 	// WriteTableFile will read a table file from the provided reader and write it to the TableFileStore.
 	WriteTableFile(ctx context.Context, fileId string, numChunks int, rd io.Reader, contentLength uint64, contentHash []byte) error
+
+	// AddTableFilesToManifest adds table files to the manifest
+	AddTableFilesToManifest(ctx context.Context, fileIdToNumChunks map[string]int) error
 
 	// PruneTableFiles deletes old table files that are no longer referenced in the manifest.
 	PruneTableFiles(ctx context.Context) error

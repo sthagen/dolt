@@ -6,7 +6,9 @@ set -o pipefail
 script_dir=$(dirname "$0")
 cd $script_dir/../..
 
-docker run --rm -v `pwd`:/src golang:1.14.2-buster /bin/bash -c '
+[ ! -z "$GO_BUILD_VERSION" ] || (echo "Must supply GO_BUILD_VERSION"; exit 1)
+
+docker run --rm -v `pwd`:/src golang:"$GO_BUILD_VERSION"-buster /bin/bash -c '
 set -e
 set -o pipefail
 apt-get update && apt-get install -y zip
@@ -26,7 +28,7 @@ for os in $OSES; do
       if [ "$os" = windows ]; then
         obin="$bin.exe"
       fi
-      GOOS="$os" GOARCH="$arch" go build -o "$o/bin/$obin" "./cmd/$bin/"
+      CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -o "$o/bin/$obin" "./cmd/$bin/"
     done
     if [ "$os" = windows ]; then
       (cd out && zip -r "dolt-$os-$arch" "dolt-$os-$arch")

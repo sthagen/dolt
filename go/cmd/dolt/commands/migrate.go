@@ -71,7 +71,7 @@ func (cmd MigrateCmd) EventType() eventsapi.ClientEventType {
 func (cmd MigrateCmd) Exec(ctx context.Context, commandStr string, args []string, dEnv *env.DoltEnv) int {
 	ap := cmd.createArgParser()
 	help, _ := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, pushDocs, ap))
-	apr := cli.ParseArgs(ap, args, help)
+	apr := cli.ParseArgsOrDie(ap, args, help)
 
 	if apr.Contains(migratePushFlag) && apr.Contains(migratePullFlag) {
 		cli.PrintErrf(color.RedString("options --%s and --%s are mutually exclusive", migratePushFlag, migratePullFlag))
@@ -192,7 +192,7 @@ func pushMigratedRepo(ctx context.Context, dEnv *env.DoltEnv, apr *argparser.Arg
 			}
 
 			cli.Println(color.BlueString(fmt.Sprintf("Pushing migrated branch %s to %s", branch.String(), remoteName)))
-			mode := ref.RefUpdateMode{Force: true}
+			mode := ref.UpdateMode{Force: true}
 			err = pushToRemoteBranch(ctx, dEnv, mode, src, dest, remoteRef, dEnv.DoltDB, destDB, remote)
 
 			if err != nil {
@@ -232,7 +232,7 @@ func fetchMigratedRemoteBranches(ctx context.Context, dEnv *env.DoltEnv, apr *ar
 	r, refSpecs, err := getRefSpecs(apr.Args(), dEnv, remotes)
 
 	if err == nil {
-		err = fetchRefSpecs(ctx, ref.RefUpdateMode{Force: true}, dEnv, r, refSpecs)
+		err = fetchRefSpecs(ctx, ref.UpdateMode{Force: true}, dEnv, r, refSpecs)
 	}
 
 	return err

@@ -24,7 +24,7 @@ import (
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/merge"
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 	"github.com/dolthub/dolt/go/store/hash"
 )
 
@@ -35,13 +35,13 @@ type MergeFunc struct {
 }
 
 // NewMergeFunc creates a new MergeFunc expression.
-func NewMergeFunc(args ...sql.Expression) (sql.Expression, error) {
+func NewMergeFunc(ctx *sql.Context, args ...sql.Expression) (sql.Expression, error) {
 	return &MergeFunc{children: args}, nil
 }
 
 // Eval implements the Expression interface.
 func (cf *MergeFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
-	sess := sqle.DSessFromSess(ctx.Session)
+	sess := dsess.DSessFromSess(ctx.Session)
 
 	// TODO: Move to a separate MERGE argparser.
 	ap := cli.CreateCommitArgParser()
@@ -51,7 +51,10 @@ func (cf *MergeFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	apr := cli.ParseArgs(ap, args, nil)
+	apr, err := ap.Parse(args)
+	if err != nil {
+		return nil, err
+	}
 
 	// The fist argument should be the branch name.
 	branchName := apr.Arg(0)
@@ -78,32 +81,44 @@ func (cf *MergeFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, sql.ErrDatabaseNotFound.New(dbName)
 	}
 
-	parent, ph, parentRoot, err := getParent(ctx, err, sess, dbName)
+	head, hh, headRoot, err := getHead(ctx, sess, dbName)
 	if err != nil {
 		return nil, err
 	}
 
-	err = checkForUncommittedChanges(root, parentRoot)
+	err = checkForUncommittedChanges(root, headRoot)
 	if err != nil {
 		return nil, err
 	}
 
-	cm, cmh, err := getBranchCommit(ctx, ok, branchName, err, ddb)
+	cm, cmh, err := getBranchCommit(ctx, branchName, ddb)
 	if err != nil {
 		return nil, err
 	}
 
-	// No need to write a merge commit, if the parent can ffw to the commit coming from the branch.
-	canFF, err := parent.CanFastForwardTo(ctx, cm)
+	// No need to write a merge commit, if the head can ffw to the commit coming from the branch.
+	canFF, err := head.CanFastForwardTo(ctx, cm)
 	if err != nil {
 		return nil, err
 	}
 
 	if canFF {
-		return cmh.String(), nil
+		ancRoot, err := head.GetRootValue()
+		if err != nil {
+			return nil, err
+		}
+		mergedRoot, err := cm.GetRootValue()
+		if err != nil {
+			return nil, err
+		}
+		if cvPossible, err := merge.MayHaveConstraintViolations(ctx, ancRoot, mergedRoot); err != nil {
+			return nil, err
+		} else if !cvPossible {
+			return cmh.String(), nil
+		}
 	}
 
-	mergeRoot, _, err := merge.MergeCommits(ctx, parent, cm)
+	mergeRoot, _, err := merge.MergeCommits(ctx, head, cm)
 
 	if err != nil {
 		return nil, err
@@ -114,13 +129,13 @@ func (cf *MergeFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	commitMessage := fmt.Sprintf("SQL Generated commit merging %s into %s", ph.String(), cmh.String())
+	commitMessage := fmt.Sprintf("SQL Generated commit merging %s into %s", hh.String(), cmh.String())
 	meta, err := doltdb.NewCommitMeta(name, email, commitMessage)
 	if err != nil {
 		return nil, err
 	}
 
-	mergeCommit, err := ddb.CommitDanglingWithParentCommits(ctx, h, []*doltdb.Commit{parent, cm}, meta)
+	mergeCommit, err := ddb.CommitDanglingWithParentCommits(ctx, h, []*doltdb.Commit{head, cm}, meta)
 	if err != nil {
 		return nil, err
 	}
@@ -133,27 +148,26 @@ func (cf *MergeFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	return h.String(), nil
 }
 
-func checkForUncommittedChanges(root *doltdb.RootValue, parentRoot *doltdb.RootValue) error {
+func checkForUncommittedChanges(root *doltdb.RootValue, headRoot *doltdb.RootValue) error {
 	rh, err := root.HashOf()
 
 	if err != nil {
 		return err
 	}
 
-	prh, err := parentRoot.HashOf()
+	hrh, err := headRoot.HashOf()
 
 	if err != nil {
 		return err
 	}
 
-	if rh != prh {
+	if rh != hrh {
 		return errors.New("cannot merge with uncommitted changes")
 	}
-
 	return nil
 }
 
-func getBranchCommit(ctx *sql.Context, ok bool, val interface{}, err error, ddb *doltdb.DoltDB) (*doltdb.Commit, hash.Hash, error) {
+func getBranchCommit(ctx *sql.Context, val interface{}, ddb *doltdb.DoltDB) (*doltdb.Commit, hash.Hash, error) {
 	paramStr, ok := val.(string)
 
 	if !ok {
@@ -166,7 +180,7 @@ func getBranchCommit(ctx *sql.Context, ok bool, val interface{}, err error, ddb 
 		return nil, hash.Hash{}, err
 	}
 
-	cm, err := ddb.ResolveRef(ctx, branchRef)
+	cm, err := ddb.ResolveCommitRef(ctx, branchRef)
 
 	if err != nil {
 		return nil, hash.Hash{}, err
@@ -181,20 +195,23 @@ func getBranchCommit(ctx *sql.Context, ok bool, val interface{}, err error, ddb 
 	return cm, cmh, nil
 }
 
-func getParent(ctx *sql.Context, err error, sess *sqle.DoltSession, dbName string) (*doltdb.Commit, hash.Hash, *doltdb.RootValue, error) {
-	parent, ph, err := sess.GetParentCommit(ctx, dbName)
-
+func getHead(ctx *sql.Context, sess *dsess.Session, dbName string) (*doltdb.Commit, hash.Hash, *doltdb.RootValue, error) {
+	head, err := sess.GetHeadCommit(ctx, dbName)
 	if err != nil {
 		return nil, hash.Hash{}, nil, err
 	}
 
-	parentRoot, err := parent.GetRootValue()
-
+	hh, err := head.HashOf()
 	if err != nil {
 		return nil, hash.Hash{}, nil, err
 	}
 
-	return parent, ph, parentRoot, nil
+	headRoot, err := head.GetRootValue()
+	if err != nil {
+		return nil, hash.Hash{}, nil, err
+	}
+
+	return head, hh, headRoot, nil
 }
 
 // String implements the Stringer interface.
@@ -226,8 +243,8 @@ func (cf *MergeFunc) Children() []sql.Expression {
 }
 
 // WithChildren implements the Expression interface.
-func (cf *MergeFunc) WithChildren(children ...sql.Expression) (sql.Expression, error) {
-	return NewMergeFunc(children...)
+func (cf *MergeFunc) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
+	return NewMergeFunc(ctx, children...)
 }
 
 // Type implements the Expression interface.

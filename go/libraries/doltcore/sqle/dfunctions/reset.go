@@ -21,7 +21,7 @@ import (
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 
-	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 	"github.com/dolthub/dolt/go/store/hash"
 )
 
@@ -36,11 +36,12 @@ type ResetFunc struct {
 }
 
 // NewDoltResetFunc creates a new ResetFunc expression.
-func NewResetFunc(e sql.Expression) sql.Expression {
+func NewResetFunc(ctx *sql.Context, e sql.Expression) sql.Expression {
 	return ResetFunc{expression.UnaryExpression{Child: e}}
 }
 
 // Eval implements the Expression interface.
+// TODO: this doesn't seem to do anything
 func (rf ResetFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	val, err := rf.Child.Eval(ctx, row)
 	if err != nil {
@@ -52,14 +53,14 @@ func (rf ResetFunc) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	dbName := ctx.GetCurrentDatabase()
-	dSess := sqle.DSessFromSess(ctx.Session)
+	dSess := dsess.DSessFromSess(ctx.Session)
 
 	var h hash.Hash
 	if strings.ToLower(arg) != resetHardParameter {
 		return nil, fmt.Errorf("invalid arugument to %s(): %s", resetFuncName, arg)
 	}
 
-	parent, _, err := dSess.GetParentCommit(ctx, dbName)
+	parent, err := dSess.GetHeadCommit(ctx, dbName)
 	if err != nil {
 		return nil, err
 	}
@@ -93,11 +94,11 @@ func (rf ResetFunc) Children() []sql.Expression {
 }
 
 // WithChildren implements the Expression interface.
-func (rf ResetFunc) WithChildren(children ...sql.Expression) (sql.Expression, error) {
+func (rf ResetFunc) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Expression, error) {
 	if len(children) != 1 {
 		return nil, sql.ErrInvalidChildrenNumber.New(rf, len(children), 1)
 	}
-	return NewResetFunc(children[0]), nil
+	return NewResetFunc(ctx, children[0]), nil
 }
 
 // Type implements the Expression interface.

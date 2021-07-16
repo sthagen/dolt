@@ -120,14 +120,14 @@ func resolvePkTable(ctx context.Context, sess *editor.TableEditSession, tbl *dol
 				return false, err
 			}
 
-			if has, err := row.IsValid(updatedRow, tblSch); err != nil {
+			if isValid, err := row.IsValid(updatedRow, tblSch); err != nil {
 				return false, err
-			} else if !has {
-				return false, table.NewBadRow(updatedRow)
+			} else if !isValid {
+				return false, table.NewBadRow(updatedRow, "error resolving conflicts", fmt.Sprintf("row with primary key %v in table %s does not match constraints or types of the table's schema.", key, tblName))
 			}
 
 			if types.IsNull(cnf.Value) {
-				err = tableEditor.InsertRow(ctx, updatedRow)
+				err = tableEditor.InsertRow(ctx, updatedRow, nil)
 				if err != nil {
 					return false, err
 				}
@@ -136,7 +136,7 @@ func resolvePkTable(ctx context.Context, sess *editor.TableEditSession, tbl *dol
 				if err != nil {
 					return false, err
 				}
-				err = tableEditor.UpdateRow(ctx, originalRow, updatedRow)
+				err = tableEditor.UpdateRow(ctx, originalRow, updatedRow, nil)
 				if err != nil {
 					return false, err
 				}

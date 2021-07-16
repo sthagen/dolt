@@ -34,46 +34,49 @@ import (
 	"github.com/dolthub/dolt/go/store/types"
 )
 
-var fk_dEnv *env.DoltEnv
-var fk_initialRoot *doltdb.RootValue
-
-func init() {
-	fk_dEnv = dtestutils.CreateTestEnv()
-	root, err := fk_dEnv.WorkingRoot(context.Background())
+func setupEditorFkTest(t *testing.T) (*env.DoltEnv, *doltdb.RootValue) {
+	dEnv := dtestutils.CreateTestEnv()
+	root, err := dEnv.WorkingRoot(context.Background())
 	if err != nil {
 		panic(err)
 	}
-	fk_initialRoot, err = ExecuteSql(fk_dEnv, root, `
+	initialRoot, err := ExecuteSql(t, dEnv, root, `
 CREATE TABLE one (
   pk BIGINT PRIMARY KEY,
   v1 BIGINT,
-  v2 BIGINT
+  v2 BIGINT,
+  INDEX secondary (v1)
 );
 CREATE TABLE two (
   pk BIGINT PRIMARY KEY,
   v1 BIGINT,
-  v2 BIGINT
+  v2 BIGINT,
+  INDEX secondary (v1,v2)
 );
 CREATE TABLE three (
   pk BIGINT PRIMARY KEY,
   v1 BIGINT,
   v2 BIGINT
 );
-ALTER TABLE one ADD INDEX secondary (v1);
-ALTER TABLE two ADD INDEX secondary (v1,v2);
-`)
-	if err != nil {
-		panic(err)
-	}
-}
-
-func TestTableEditorForeignKeyCascade(t *testing.T) {
-	testRoot, err := ExecuteSql(fk_dEnv, fk_initialRoot, `
-ALTER TABLE two ADD FOREIGN KEY (v1) REFERENCES one(v1) ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE three ADD FOREIGN KEY (v1, v2) REFERENCES two(v1, v2) ON DELETE CASCADE ON UPDATE CASCADE;
+CREATE TABLE parent (
+  id BIGINT PRIMARY KEY,
+  v1 BIGINT,
+  v2 BIGINT,
+  INDEX v1 (v1),
+  INDEX v2 (v2)
+);
+CREATE TABLE child (
+  id BIGINT PRIMARY KEY,
+  v1 BIGINT,
+  v2 BIGINT
+);
 `)
 	require.NoError(t, err)
 
+	return dEnv, initialRoot
+}
+
+func TestTableEditorForeignKeyCascade(t *testing.T) {
 	tests := []struct {
 		name          string
 		sqlStatement  string
@@ -151,25 +154,29 @@ ALTER TABLE three ADD FOREIGN KEY (v1, v2) REFERENCES two(v1, v2) ON DELETE CASC
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			dEnv, initialRoot := setupEditorFkTest(t)
+
+			testRoot, err := ExecuteSql(t, dEnv, initialRoot, `
+ALTER TABLE two ADD FOREIGN KEY (v1) REFERENCES one(v1) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE three ADD FOREIGN KEY (v1, v2) REFERENCES two(v1, v2) ON DELETE CASCADE ON UPDATE CASCADE;
+`)
+			require.NoError(t, err)
+
 			root := testRoot
 			for _, sqlStatement := range strings.Split(test.sqlStatement, ";") {
 				var err error
-				root, err = executeModify(context.Background(), fk_dEnv, root, sqlStatement)
+				root, err = executeModify(t, context.Background(), dEnv, root, sqlStatement)
 				require.NoError(t, err)
 			}
 
-			assertTableEditorRows(t, fk_dEnv, root, test.expectedOne, "one")
-			assertTableEditorRows(t, fk_dEnv, root, test.expectedTwo, "two")
-			assertTableEditorRows(t, fk_dEnv, root, test.expectedThree, "three")
+			assertTableEditorRows(t, root, test.expectedOne, "one")
+			assertTableEditorRows(t, root, test.expectedTwo, "two")
+			assertTableEditorRows(t, root, test.expectedThree, "three")
 		})
 	}
 }
 
 func TestTableEditorForeignKeySetNull(t *testing.T) {
-	testRoot, err := ExecuteSql(fk_dEnv, fk_initialRoot, `
-ALTER TABLE two ADD FOREIGN KEY (v1) REFERENCES one(v1) ON DELETE SET NULL ON UPDATE SET NULL;`)
-	require.NoError(t, err)
-
 	tests := []struct {
 		sqlStatement string
 		expectedOne  []sql.Row
@@ -196,18 +203,24 @@ ALTER TABLE two ADD FOREIGN KEY (v1) REFERENCES one(v1) ON DELETE SET NULL ON UP
 
 	for _, test := range tests {
 		t.Run(test.sqlStatement, func(t *testing.T) {
+			dEnv, initialRoot := setupEditorFkTest(t)
+
+			testRoot, err := ExecuteSql(t, dEnv, initialRoot, `
+ALTER TABLE two ADD FOREIGN KEY (v1) REFERENCES one(v1) ON DELETE SET NULL ON UPDATE SET NULL;`)
+			require.NoError(t, err)
+
 			root := testRoot
 			for _, sqlStatement := range strings.Split(test.sqlStatement, ";") {
 				var err error
-				root, err = executeModify(context.Background(), fk_dEnv, root, sqlStatement)
+				root, err = executeModify(t, context.Background(), dEnv, root, sqlStatement)
 				require.NoError(t, err)
 			}
 
 			t.Run("one", func(t *testing.T) {
-				assertTableEditorRows(t, nil, root, test.expectedOne, "one")
+				assertTableEditorRows(t, root, test.expectedOne, "one")
 			})
 			t.Run("two", func(t *testing.T) {
-				assertTableEditorRows(t, nil, root, test.expectedTwo, "two")
+				assertTableEditorRows(t, root, test.expectedTwo, "two")
 			})
 		})
 	}
@@ -220,12 +233,6 @@ func TestTableEditorForeignKeyRestrict(t *testing.T) {
 		"",
 	} {
 		t.Run(referenceOption, func(t *testing.T) {
-			testRoot, err := ExecuteSql(fk_dEnv, fk_initialRoot, fmt.Sprintf(`
-			ALTER TABLE two ADD FOREIGN KEY (v1) REFERENCES one(v1) %s;
-			INSERT INTO one VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
-			INSERT INTO two VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);`, referenceOption))
-			require.NoError(t, err)
-
 			tests := []struct {
 				setup       string
 				trigger     string
@@ -278,17 +285,25 @@ func TestTableEditorForeignKeyRestrict(t *testing.T) {
 
 			for _, test := range tests {
 				t.Run(test.setup+test.trigger, func(t *testing.T) {
+					dEnv, initialRoot := setupEditorFkTest(t)
+
+					testRoot, err := ExecuteSql(t, dEnv, initialRoot, fmt.Sprintf(`
+			ALTER TABLE two ADD FOREIGN KEY (v1) REFERENCES one(v1) %s;
+			INSERT INTO one VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
+			INSERT INTO two VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);`, referenceOption))
+					require.NoError(t, err)
+
 					root := testRoot
 					for _, sqlStatement := range strings.Split(test.setup, ";") {
 						var err error
-						root, err = executeModify(context.Background(), fk_dEnv, root, sqlStatement)
+						root, err = executeModify(t, context.Background(), dEnv, root, sqlStatement)
 						require.NoError(t, err)
 					}
 					if test.expectedErr {
-						root, err = executeModify(context.Background(), fk_dEnv, root, test.trigger)
+						root, err = executeModify(t, context.Background(), dEnv, root, test.trigger)
 						assert.Error(t, err)
 					} else {
-						root, err = executeModify(context.Background(), fk_dEnv, root, test.trigger)
+						root, err = executeModify(t, context.Background(), dEnv, root, test.trigger)
 						assert.NoError(t, err)
 					}
 				})
@@ -298,12 +313,6 @@ func TestTableEditorForeignKeyRestrict(t *testing.T) {
 }
 
 func TestTableEditorForeignKeyViolations(t *testing.T) {
-	testRoot, err := ExecuteSql(fk_dEnv, fk_initialRoot, `
-ALTER TABLE two ADD FOREIGN KEY (v1) REFERENCES one(v1) ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE three ADD FOREIGN KEY (v1, v2) REFERENCES two(v1, v2) ON DELETE CASCADE ON UPDATE CASCADE;
-`)
-	require.NoError(t, err)
-
 	tests := []struct {
 		setup   string
 		trigger string
@@ -347,19 +356,297 @@ ALTER TABLE three ADD FOREIGN KEY (v1, v2) REFERENCES two(v1, v2) ON DELETE CASC
 
 	for _, test := range tests {
 		t.Run(test.setup+test.trigger, func(t *testing.T) {
+			dEnv, initialRoot := setupEditorFkTest(t)
+
+			testRoot, err := ExecuteSql(t, dEnv, initialRoot, `
+ALTER TABLE two ADD FOREIGN KEY (v1) REFERENCES one(v1) ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE three ADD FOREIGN KEY (v1, v2) REFERENCES two(v1, v2) ON DELETE CASCADE ON UPDATE CASCADE;
+`)
+			require.NoError(t, err)
+
 			root := testRoot
 			for _, sqlStatement := range strings.Split(test.setup, ";") {
 				var err error
-				root, err = executeModify(context.Background(), fk_dEnv, root, sqlStatement)
+				root, err = executeModify(t, context.Background(), dEnv, root, sqlStatement)
 				require.NoError(t, err)
 			}
-			root, err = executeModify(context.Background(), fk_dEnv, root, test.trigger)
+			root, err = executeModify(t, context.Background(), dEnv, root, test.trigger)
 			assert.Error(t, err)
 		})
 	}
 }
 
-func assertTableEditorRows(t *testing.T, fk_dEnv *env.DoltEnv, root *doltdb.RootValue, expected []sql.Row, tableName string) {
+func TestTableEditorSelfReferentialForeignKeyRestrict(t *testing.T) {
+	dEnv, initialRoot := setupEditorFkTest(t)
+
+	ctx := context.Background()
+	root := initialRoot
+
+	sequentialTests := []struct {
+		statement   string
+		currentTbl  []sql.Row
+		expectedErr bool
+	}{
+		{
+			"ALTER TABLE parent ADD CONSTRAINT fk_named FOREIGN KEY (v2) REFERENCES parent(v1);",
+			[]sql.Row{},
+			false,
+		},
+		{
+			"INSERT INTO parent VALUES (1,1,1), (2, 2, 1), (3, 3, NULL);",
+			[]sql.Row{{1, 1, 1}, {2, 2, 1}, {3, 3, nil}},
+			false,
+		},
+		{
+			"UPDATE parent SET v1 = 1 WHERE id = 1;",
+			[]sql.Row{{1, 1, 1}, {2, 2, 1}, {3, 3, nil}},
+			false,
+		},
+		{
+			"UPDATE parent SET v1 = 4 WHERE id = 3;",
+			[]sql.Row{{1, 1, 1}, {2, 2, 1}, {3, 4, nil}},
+			false,
+		},
+		{
+			"DELETE FROM parent WHERE id = 3;",
+			[]sql.Row{{1, 1, 1}, {2, 2, 1}},
+			false,
+		},
+		{
+			"DELETE FROM parent WHERE v1 = 1;",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"UPDATE parent SET v1 = 2;",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"REPLACE INTO parent VALUES (1, 1, 1);",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"UPDATE parent SET v1 = 3, v2 = 3 WHERE id = 2;",
+			[]sql.Row{{1, 1, 1}, {2, 3, 3}},
+			false,
+		},
+	}
+
+	for _, test := range sequentialTests {
+		newRoot, err := executeModify(t, ctx, dEnv, root, test.statement)
+		if test.expectedErr {
+			require.Error(t, err)
+			continue
+		}
+		require.NoError(t, err)
+		assertTableEditorRows(t, newRoot, test.currentTbl, "parent")
+		root = newRoot
+	}
+}
+
+func TestTableEditorSelfReferentialForeignKeyCascade(t *testing.T) {
+	dEnv, initialRoot := setupEditorFkTest(t)
+
+	ctx := context.Background()
+	root := initialRoot
+
+	sequentialTests := []struct {
+		statement   string
+		currentTbl  []sql.Row
+		expectedErr bool
+	}{
+		{
+			"ALTER TABLE parent ADD CONSTRAINT fk_named FOREIGN KEY (v2) REFERENCES parent(v1) ON UPDATE CASCADE ON DELETE CASCADE;",
+			[]sql.Row{},
+			false,
+		},
+		{
+			"INSERT INTO parent VALUES (1,1,1), (2, 2, 1), (3, 3, NULL);",
+			[]sql.Row{{1, 1, 1}, {2, 2, 1}, {3, 3, nil}},
+			false,
+		},
+		{
+			"UPDATE parent SET v1 = 1 WHERE id = 1;",
+			[]sql.Row{{1, 1, 1}, {2, 2, 1}, {3, 3, nil}},
+			false,
+		},
+		{
+			"UPDATE parent SET v1 = 4 WHERE id = 3;",
+			[]sql.Row{{1, 1, 1}, {2, 2, 1}, {3, 4, nil}},
+			false,
+		},
+		{
+			"DELETE FROM parent WHERE id = 3;",
+			[]sql.Row{{1, 1, 1}, {2, 2, 1}},
+			false,
+		},
+		{
+			"UPDATE parent SET v1 = 2;",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"REPLACE INTO parent VALUES (1, 1, 1), (2, 2, 2);",
+			[]sql.Row{{1, 1, 1}, {2, 2, 2}},
+			false,
+		},
+		{ // Repeated UPDATE ensures that it still fails even with changed data
+			"UPDATE parent SET v1 = 2;",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"UPDATE parent SET v1 = 2 WHERE id = 1;",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"REPLACE INTO parent VALUES (1,1,2), (2,2,1);",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"UPDATE parent SET v2 = 2 WHERE id = 1;",
+			[]sql.Row{{1, 1, 2}, {2, 2, 2}},
+			false,
+		},
+		{
+			"UPDATE parent SET v2 = 1 WHERE id = 2;",
+			[]sql.Row{{1, 1, 2}, {2, 2, 1}},
+			false,
+		},
+		{ // Repeated UPDATE ensures that it still fails even with changed data
+			"UPDATE parent SET v1 = 2;",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"UPDATE parent SET v1 = 2 WHERE id = 1;",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"DELETE FROM parent WHERE v1 = 1;",
+			[]sql.Row{},
+			false,
+		},
+	}
+
+	for _, test := range sequentialTests {
+		newRoot, err := executeModify(t, ctx, dEnv, root, test.statement)
+		if test.expectedErr {
+			require.Error(t, err)
+			continue
+		}
+		require.NoError(t, err)
+		assertTableEditorRows(t, newRoot, test.currentTbl, "parent")
+		root = newRoot
+	}
+}
+
+func TestTableEditorSelfReferentialForeignKeySetNull(t *testing.T) {
+	dEnv, initialRoot := setupEditorFkTest(t)
+
+	ctx := context.Background()
+	root := initialRoot
+
+	sequentialTests := []struct {
+		statement   string
+		currentTbl  []sql.Row
+		expectedErr bool
+	}{
+		{
+			"ALTER TABLE parent ADD CONSTRAINT fk_named FOREIGN KEY (v2) REFERENCES parent(v1) ON UPDATE SET NULL ON DELETE SET NULL;",
+			[]sql.Row{},
+			false,
+		},
+		{
+			"INSERT INTO parent VALUES (1,1,1), (2, 2, 1), (3, 3, NULL);",
+			[]sql.Row{{1, 1, 1}, {2, 2, 1}, {3, 3, nil}},
+			false,
+		},
+		{
+			"UPDATE parent SET v1 = 1 WHERE id = 1;",
+			[]sql.Row{{1, 1, 1}, {2, 2, 1}, {3, 3, nil}},
+			false,
+		},
+		{
+			"UPDATE parent SET v1 = 4 WHERE id = 3;",
+			[]sql.Row{{1, 1, 1}, {2, 2, 1}, {3, 4, nil}},
+			false,
+		},
+		{
+			"DELETE FROM parent WHERE id = 3;",
+			[]sql.Row{{1, 1, 1}, {2, 2, 1}},
+			false,
+		},
+		{
+			"UPDATE parent SET v1 = 2;",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"REPLACE INTO parent VALUES (1, 1, 1), (2, 2, 2);",
+			[]sql.Row{{1, 1, 1}, {2, 2, 2}},
+			false,
+		},
+		{ // Repeated UPDATE ensures that it still fails even with changed data
+			"UPDATE parent SET v1 = 2;",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"UPDATE parent SET v1 = 2 WHERE id = 1;",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"REPLACE INTO parent VALUES (1,1,2), (2,2,1);",
+			[]sql.Row{{1, 1, nil}, {2, 2, 1}},
+			false,
+		},
+		{
+			"UPDATE parent SET v2 = 2 WHERE id = 1;",
+			[]sql.Row{{1, 1, 2}, {2, 2, 1}},
+			false,
+		},
+		{
+			"UPDATE parent SET v2 = 1 WHERE id = 2;",
+			[]sql.Row{{1, 1, 2}, {2, 2, 1}},
+			false,
+		},
+		{ // Repeated UPDATE ensures that it still fails even with changed data
+			"UPDATE parent SET v1 = 2;",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"UPDATE parent SET v1 = 2 WHERE id = 1;",
+			[]sql.Row{},
+			true,
+		},
+		{
+			"DELETE FROM parent WHERE v1 = 1;",
+			[]sql.Row{{2, 2, nil}},
+			false,
+		},
+	}
+
+	for _, test := range sequentialTests {
+		newRoot, err := executeModify(t, ctx, dEnv, root, test.statement)
+		if test.expectedErr {
+			require.Error(t, err)
+			continue
+		}
+		require.NoError(t, err)
+		assertTableEditorRows(t, newRoot, test.currentTbl, "parent")
+		root = newRoot
+	}
+}
+
+func assertTableEditorRows(t *testing.T, root *doltdb.RootValue, expected []sql.Row, tableName string) {
 	tbl, ok, err := root.GetTable(context.Background(), tableName)
 	require.NoError(t, err)
 	require.True(t, ok)

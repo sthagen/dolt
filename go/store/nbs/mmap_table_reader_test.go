@@ -23,18 +23,20 @@ package nbs
 
 import (
 	"io/ioutil"
-	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/dolthub/dolt/go/libraries/utils/file"
+
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMmapTableReader(t *testing.T) {
 	assert := assert.New(t)
 	dir, err := ioutil.TempDir("", "")
-	assert.NoError(err)
-	defer os.RemoveAll(dir)
+	require.NoError(t, err)
+	defer file.RemoveAll(dir)
 
 	fc := newFDCache(1)
 	defer fc.Drop()
@@ -46,11 +48,11 @@ func TestMmapTableReader(t *testing.T) {
 	}
 
 	tableData, h, err := buildTable(chunks)
-	assert.NoError(err)
+	require.NoError(t, err)
 	err = ioutil.WriteFile(filepath.Join(dir, h.String()), tableData, 0666)
-	assert.NoError(err)
+	require.NoError(t, err)
 
 	trc, err := newMmapTableReader(dir, h, uint32(len(chunks)), nil, fc)
-	assert.NoError(err)
+	require.NoError(t, err)
 	assertChunksInReader(chunks, trc, assert)
 }

@@ -29,23 +29,49 @@ import (
 const (
 	tableStructName = "table"
 
-	schemaRefKey       = "schema_ref"
-	tableRowsKey       = "rows"
-	conflictsKey       = "conflicts"
-	conflictSchemasKey = "conflict_schemas"
-	indexesKey         = "indexes"
-	autoIncrementKey   = "auto_increment"
+	schemaRefKey            = "schema_ref"
+	tableRowsKey            = "rows"
+	conflictsKey            = "conflicts"
+	conflictSchemasKey      = "conflict_schemas"
+	constraintViolationsKey = "constraint_violations"
+	indexesKey              = "indexes"
+	autoIncrementKey        = "auto_increment"
 
 	// TableNameRegexStr is the regular expression that valid tables must match.
-	TableNameRegexStr = `^[a-zA-Z]{1}$|^[a-zA-Z]+[-_0-9a-zA-Z]*[0-9a-zA-Z]+$`
+	TableNameRegexStr = `^[a-zA-Z]{1}$|^[a-zA-Z_]+[-_0-9a-zA-Z]*[0-9a-zA-Z]+$`
+	// ForeignKeyNameRegexStr is the regular expression that valid foreign keys must match.
+	// From the unquoted identifiers: https://dev.mysql.com/doc/refman/8.0/en/identifiers.html
+	// We also allow the '-' character from quoted identifiers.
+	ForeignKeyNameRegexStr = `^[-$_0-9a-zA-Z]+$`
+	// IndexNameRegexStr is the regular expression that valid indexes must match.
+	// From the unquoted identifiers: https://dev.mysql.com/doc/refman/8.0/en/identifiers.html
+	// We also allow the '-' character from quoted identifiers.
+	IndexNameRegexStr = `^[-$_0-9a-zA-Z]+$`
 )
 
-var tableNameRegex, _ = regexp.Compile(TableNameRegexStr)
+var (
+	tableNameRegex      = regexp.MustCompile(TableNameRegexStr)
+	foreignKeyNameRegex = regexp.MustCompile(ForeignKeyNameRegexStr)
+	indexNameRegex      = regexp.MustCompile(IndexNameRegexStr)
+
+	ErrNoConflictsResolved  = errors.New("no conflicts resolved")
+	ErrNoAutoIncrementValue = fmt.Errorf("auto increment set for non-numeric column type")
+)
 
 // IsValidTableName returns true if the name matches the regular expression TableNameRegexStr.
 // Table names must be composed of 1 or more letters and non-initial numerals, as well as the characters _ and -
 func IsValidTableName(name string) bool {
 	return tableNameRegex.MatchString(name)
+}
+
+// IsValidForeignKeyName returns true if the name matches the regular expression ForeignKeyNameRegexStr.
+func IsValidForeignKeyName(name string) bool {
+	return foreignKeyNameRegex.MatchString(name)
+}
+
+// IsValidIndexName returns true if the name matches the regular expression IndexNameRegexStr.
+func IsValidIndexName(name string) bool {
+	return indexNameRegex.MatchString(name)
 }
 
 // Table is a struct which holds row data, as well as a reference to it's schema.
@@ -128,23 +154,19 @@ func (t *Table) SetConflicts(ctx context.Context, schemas Conflict, conflictData
 
 func (t *Table) GetConflicts(ctx context.Context) (Conflict, types.Map, error) {
 	schemasVal, ok, err := t.tableStruct.MaybeGet(conflictSchemasKey)
-
 	if err != nil {
 		return Conflict{}, types.EmptyMap, err
 	}
-
 	if !ok {
 		return Conflict{}, types.EmptyMap, ErrNoConflicts
 	}
 
 	schemas, err := ConflictFromTuple(schemasVal.(types.Tuple))
-
 	if err != nil {
 		return Conflict{}, types.EmptyMap, err
 	}
 
 	conflictsVal, _, err := t.tableStruct.MaybeGet(conflictsKey)
-
 	if err != nil {
 		return Conflict{}, types.EmptyMap, err
 	}
@@ -247,6 +269,46 @@ func (t *Table) GetConflictSchemas(ctx context.Context) (base, sch, mergeSch sch
 		return baseSch, sch, mergeSch, err
 	}
 	return nil, nil, nil, ErrNoConflicts
+}
+
+// GetConstraintViolations returns a map of all constraint violations for this table, along with a bool indicating
+// whether the table has any violations.
+func (t *Table) GetConstraintViolations(ctx context.Context) (types.Map, error) {
+	constraintViolationsRefVal, ok, err := t.tableStruct.MaybeGet(constraintViolationsKey)
+	if err != nil {
+		return types.EmptyMap, err
+	}
+	if !ok {
+		emptyMap, err := types.NewMap(ctx, t.vrw)
+		return emptyMap, err
+	}
+	constraintViolationsVal, err := constraintViolationsRefVal.(types.Ref).TargetValue(ctx, t.vrw)
+	if err != nil {
+		return types.EmptyMap, err
+	}
+	return constraintViolationsVal.(types.Map), nil
+}
+
+// SetConstraintViolations sets this table's violations to the given map. If the map is empty, then the constraint
+// violations entry on the embedded struct is removed.
+func (t *Table) SetConstraintViolations(ctx context.Context, violationsMap types.Map) (*Table, error) {
+	// We can't just call violationsMap.Empty() as we can't guarantee that the caller passed in an instantiated map
+	if violationsMap == types.EmptyMap || violationsMap.Len() == 0 {
+		updatedStruct, err := t.tableStruct.Delete(constraintViolationsKey)
+		if err != nil {
+			return nil, err
+		}
+		return &Table{t.vrw, updatedStruct}, nil
+	}
+	constraintViolationsRef, err := WriteValAndGetRef(ctx, t.vrw, violationsMap)
+	if err != nil {
+		return nil, err
+	}
+	updatedStruct, err := t.tableStruct.Set(constraintViolationsKey, constraintViolationsRef)
+	if err != nil {
+		return nil, err
+	}
+	return &Table{t.vrw, updatedStruct}, nil
 }
 
 func RefToSchema(ctx context.Context, vrw types.ValueReadWriter, ref types.Ref) (schema.Schema, error) {
@@ -378,7 +440,6 @@ func (t *Table) GetRowData(ctx context.Context) (types.Map, error) {
 func (t *Table) ResolveConflicts(ctx context.Context, pkTuples []types.Value) (invalid, notFound []types.Value, tbl *Table, err error) {
 	removed := 0
 	_, confData, err := t.GetConflicts(ctx)
-
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -396,28 +457,40 @@ func (t *Table) ResolveConflicts(ctx context.Context, pkTuples []types.Value) (i
 	}
 
 	if removed == 0 {
-		return invalid, notFound, tbl, nil
+		return invalid, notFound, tbl, ErrNoConflictsResolved
 	}
 
 	conflicts, err := confEdit.Map(ctx)
-
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	conflictsRef, err := WriteValAndGetRef(ctx, t.vrw, conflicts)
-
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	updatedSt, err := t.tableStruct.Set(conflictsKey, conflictsRef)
-
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	return invalid, notFound, &Table{t.vrw, updatedSt}, nil
+	newTbl := &Table{t.vrw, updatedSt}
+
+	// If we resolved the last conflict, mark the table conflict free
+	numRowsInConflict, err := newTbl.NumRowsInConflict(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	if numRowsInConflict == 0 {
+		newTbl, err = newTbl.ClearConflicts()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+
+	return invalid, notFound, newTbl, nil
 }
 
 // GetIndexData returns the internal index map which goes from index name to a ref of the row data map.
@@ -615,7 +688,7 @@ func (t *Table) GetAutoIncrementValue(ctx context.Context) (types.Value, error) 
 	case types.FloatKind:
 		return types.Float(1), nil
 	default:
-		return nil, fmt.Errorf("auto increment set for non-numeric column type")
+		return nil, ErrNoAutoIncrementValue
 	}
 }
 

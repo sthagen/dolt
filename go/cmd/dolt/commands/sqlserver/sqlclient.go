@@ -90,7 +90,7 @@ func (cmd SqlClientCmd) Exec(ctx context.Context, commandStr string, args []stri
 	ap := cmd.createArgParser()
 	help, _ := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, sqlClientDocs, ap))
 
-	apr := cli.ParseArgs(ap, args, help)
+	apr := cli.ParseArgsOrDie(ap, args, help)
 	serverConfig, err := GetServerConfig(dEnv, apr)
 	if err != nil {
 		cli.PrintErrln(color.RedString("Bad Configuration"))
@@ -190,7 +190,7 @@ func (cmd SqlClientCmd) Exec(ctx context.Context, commandStr string, args []stri
 			}
 			if wrapper.HasMoreRows() {
 				sqlCtx := sql.NewContext(ctx)
-				err = commands.PrettyPrintResults(sqlCtx, 0, wrapper.Schema(), wrapper)
+				err = commands.PrettyPrintResults(sqlCtx, 0, wrapper.Schema(), wrapper, commands.HasTopLevelOrderByClause(query))
 				if err != nil {
 					shell.Println(color.RedString(err.Error()))
 					return
@@ -213,10 +213,12 @@ func (cmd SqlClientCmd) Exec(ctx context.Context, commandStr string, args []stri
 	if err != nil {
 		cli.PrintErrln(err.Error())
 	}
-	serverController.StopServer()
-	err = serverController.WaitForClose()
-	if err != nil {
-		cli.PrintErrln(err.Error())
+	if apr.Contains(sqlClientDualFlag) {
+		serverController.StopServer()
+		err = serverController.WaitForClose()
+		if err != nil {
+			cli.PrintErrln(err.Error())
+		}
 	}
 
 	return 0

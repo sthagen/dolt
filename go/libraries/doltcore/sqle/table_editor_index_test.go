@@ -31,16 +31,12 @@ import (
 	"github.com/dolthub/dolt/go/store/types"
 )
 
-var index_dEnv *env.DoltEnv
-var index_initialRoot *doltdb.RootValue
-
-func init() {
-	index_dEnv = dtestutils.CreateTestEnv()
+func setupEditorIndexTest(t *testing.T) (*env.DoltEnv, *doltdb.RootValue) {
+	index_dEnv := dtestutils.CreateTestEnv()
 	root, err := index_dEnv.WorkingRoot(context.Background())
-	if err != nil {
-		panic(err)
-	}
-	index_initialRoot, err = ExecuteSql(index_dEnv, root, `
+	require.NoError(t, err)
+
+	index_initialRoot, err := ExecuteSql(t, index_dEnv, root, `
 CREATE TABLE onepk (
   pk1 BIGINT PRIMARY KEY,
   v1 BIGINT,
@@ -70,9 +66,10 @@ CREATE INDEX idx_v2v1 ON twopk(v2, v1);
 CREATE UNIQUE INDEX idx_v1 ON oneuni(v1);
 CREATE UNIQUE INDEX idx_v1v2 ON twouni(v1, v2);
 `)
-	if err != nil {
-		panic(err)
-	}
+
+	require.NoError(t, err)
+
+	return index_dEnv, index_initialRoot
 }
 
 func TestTableEditorIndexResults(t *testing.T) {
@@ -122,10 +119,12 @@ UPDATE onepk SET pk1 = v1 + pk1 ORDER BY pk1 DESC;
 
 	for _, test := range tests {
 		t.Run(test.sqlStatement, func(t *testing.T) {
-			root := index_initialRoot
+			dEnv, initialRoot := setupEditorIndexTest(t)
+
+			root := initialRoot
 			for _, sqlStatement := range strings.Split(test.sqlStatement, ";") {
 				var err error
-				root, err = executeModify(context.Background(), index_dEnv, root, sqlStatement)
+				root, err = executeModify(t, context.Background(), dEnv, root, sqlStatement)
 				require.NoError(t, err)
 			}
 
@@ -240,6 +239,25 @@ REPLACE INTO oneuni VALUES (4, 2, 2), (5, 3, 3), (3, 1, 1);
 		},
 		{
 			`
+INSERT INTO oneuni VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
+DELETE FROM oneuni WHERE v1 < 3;
+REPLACE INTO oneuni VALUES (4, 2, 2), (5, 2, 3), (3, 1, 1);
+`,
+			[]sql.Row{{1, 3}, {2, 5}},
+			[]sql.Row{},
+			false,
+		},
+		{
+			`
+INSERT INTO oneuni VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
+REPLACE INTO oneuni VALUES (1, 1, 1), (2, 2, 2), (3, 2, 3);
+`,
+			[]sql.Row{{1, 1}, {2, 3}},
+			[]sql.Row{},
+			false,
+		},
+		{
+			`
 INSERT INTO oneuni VALUES (1, 1, 1), (2, 1, 2), (3, 3, 3);
 `,
 			[]sql.Row{},
@@ -255,33 +273,16 @@ UPDATE oneuni SET v1 = v1 + pk1;
 			[]sql.Row{},
 			true,
 		},
-		{
-			`
-INSERT INTO oneuni VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
-REPLACE INTO oneuni VALUES (1, 1, 1), (2, 2, 2), (3, 2, 3);
-`,
-			[]sql.Row{},
-			[]sql.Row{},
-			true,
-		},
-		{
-			`
-INSERT INTO oneuni VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
-DELETE FROM oneuni WHERE v1 < 3;
-REPLACE INTO oneuni VALUES (4, 2, 2), (5, 2, 3), (3, 1, 1);
-`,
-			[]sql.Row{},
-			[]sql.Row{},
-			true,
-		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.sqlStatement, func(t *testing.T) {
-			root := index_initialRoot
+			dEnv, initialRoot := setupEditorIndexTest(t)
+
+			root := initialRoot
 			var err error
 			for _, sqlStatement := range strings.Split(test.sqlStatement, ";") {
-				root, err = executeModify(context.Background(), index_dEnv, root, sqlStatement)
+				root, err = executeModify(t, context.Background(), dEnv, root, sqlStatement)
 				if err != nil {
 					break
 				}

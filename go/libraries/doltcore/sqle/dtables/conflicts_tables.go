@@ -15,6 +15,8 @@ package dtables
 // limitations under the License.
 
 import (
+	"errors"
+
 	"github.com/dolthub/go-mysql-server/sql"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
@@ -154,11 +156,28 @@ func (cd *conflictDeleter) Delete(ctx *sql.Context, r sql.Row) error {
 	return nil
 }
 
+// StatementBegin implements the interface sql.TableEditor. Currently a no-op.
+func (cd *conflictDeleter) StatementBegin(ctx *sql.Context) {}
+
+// DiscardChanges implements the interface sql.TableEditor. Currently a no-op.
+func (cd *conflictDeleter) DiscardChanges(ctx *sql.Context, errorEncountered error) error {
+	return nil
+}
+
+// StatementComplete implements the interface sql.TableEditor. Currently a no-op.
+func (cd *conflictDeleter) StatementComplete(ctx *sql.Context) error {
+	return nil
+}
+
 // Close finalizes the delete operation, persisting the result.
 func (cd *conflictDeleter) Close(ctx *sql.Context) error {
 	_, _, updatedTbl, err := cd.ct.tbl.ResolveConflicts(ctx, cd.pks)
 
 	if err != nil {
+		if errors.Is(err, doltdb.ErrNoConflictsResolved) {
+			return nil
+		}
+
 		return err
 	}
 

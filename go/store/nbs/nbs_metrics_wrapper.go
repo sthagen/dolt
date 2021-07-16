@@ -41,8 +41,9 @@ func NewNBSMetricWrapper(nbs *NomsBlockStore) *NBSMetricWrapper {
 var _ TableFileStore = &NBSMetricWrapper{}
 var _ chunks.ChunkStoreGarbageCollector = &NBSMetricWrapper{}
 
-// Sources retrieves the current root hash, and a list of all the table files
-func (nbsMW *NBSMetricWrapper) Sources(ctx context.Context) (hash.Hash, []TableFile, error) {
+// Sources retrieves the current root hash, a list of all the table files,
+// and a list of the appendix table files.
+func (nbsMW *NBSMetricWrapper) Sources(ctx context.Context) (hash.Hash, []TableFile, []TableFile, error) {
 	return nbsMW.nbs.Sources(ctx)
 }
 
@@ -53,6 +54,11 @@ func (nbsMW *NBSMetricWrapper) Size(ctx context.Context) (uint64, error) {
 // WriteTableFile will read a table file from the provided reader and write it to the TableFileStore
 func (nbsMW *NBSMetricWrapper) WriteTableFile(ctx context.Context, fileId string, numChunks int, rd io.Reader, contentLength uint64, contentHash []byte) error {
 	return nbsMW.nbs.WriteTableFile(ctx, fileId, numChunks, rd, contentLength, contentHash)
+}
+
+// AddTableFilesToManifest adds table files to the manifest
+func (nbsMW *NBSMetricWrapper) AddTableFilesToManifest(ctx context.Context, fileIdToNumChunks map[string]int) error {
+	return nbsMW.nbs.AddTableFilesToManifest(ctx, fileIdToNumChunks)
 }
 
 // SetRootChunk changes the root chunk hash from the previous value to the new root.
@@ -80,4 +86,9 @@ func (nbsMW *NBSMetricWrapper) PruneTableFiles(ctx context.Context) error {
 func (nbsMW *NBSMetricWrapper) GetManyCompressed(ctx context.Context, hashes hash.HashSet, found func(CompressedChunk)) error {
 	atomic.AddInt32(&nbsMW.TotalChunkGets, int32(len(hashes)))
 	return nbsMW.nbs.GetManyCompressed(ctx, hashes, found)
+}
+
+// GetManifestStorageVersion returns the storage version of the manifest.
+func (nbsMW *NBSMetricWrapper) GetManifestStorageVersion(ctx context.Context) (string, error) {
+	return nbsMW.nbs.GetManifestStorageVersion(ctx)
 }

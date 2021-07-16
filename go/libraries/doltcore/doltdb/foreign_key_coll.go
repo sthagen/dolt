@@ -112,6 +112,11 @@ func (fk ForeignKey) HashOf() hash.Hash {
 	return hash.Of(bb.Bytes())
 }
 
+// IsSelfReferential returns whether the table declaring the foreign key is also referenced by the foreign key.
+func (fk ForeignKey) IsSelfReferential() bool {
+	return strings.ToLower(fk.TableName) == strings.ToLower(fk.ReferencedTableName)
+}
+
 // ValidateReferencedTableSchema verifies that the given schema matches the expectation of the referenced table.
 func (fk ForeignKey) ValidateReferencedTableSchema(sch schema.Schema) error {
 	allSchCols := sch.GetAllCols()
@@ -185,6 +190,8 @@ func (fkc *ForeignKeyCollection) AddKeys(fks ...ForeignKey) error {
 		if key.Name == "" {
 			// assign a name based on the hash
 			// 8 char = 5 base32 bytes, should be collision resistant
+			// TODO: constraint names should be unique, and this isn't guaranteed to be.
+			//  This logic needs to live at the table / DB level.
 			key.Name = key.HashOf().String()[:8]
 		}
 
@@ -198,9 +205,6 @@ func (fkc *ForeignKeyCollection) AddKeys(fks ...ForeignKey) error {
 		}
 		if len(key.TableColumns) != len(key.ReferencedTableColumns) {
 			return fmt.Errorf("foreign keys must have the same number of columns declared and referenced")
-		}
-		if key.TableName == key.ReferencedTableName {
-			return fmt.Errorf("inter-table foreign keys are not yet supported")
 		}
 
 		fkc.foreignKeys[key.HashOf().String()] = key
@@ -402,6 +406,16 @@ func (fkc *ForeignKeyCollection) Stage(ctx context.Context, fksToAdd []ForeignKe
 	}
 }
 
+// Tables returns the set of all tables that either declare a foreign key or are referenced by a foreign key.
+func (fkc *ForeignKeyCollection) Tables() map[string]struct{} {
+	tables := make(map[string]struct{})
+	for _, fk := range fkc.foreignKeys {
+		tables[fk.TableName] = struct{}{}
+		tables[fk.ReferencedTableName] = struct{}{}
+	}
+	return tables
+}
+
 // String returns the SQL reference option in uppercase.
 func (refOp ForeignKeyReferenceOption) String() string {
 	switch refOp {
@@ -413,6 +427,21 @@ func (refOp ForeignKeyReferenceOption) String() string {
 		return "NO ACTION"
 	case ForeignKeyReferenceOption_Restrict:
 		return "RESTRICT"
+	case ForeignKeyReferenceOption_SetNull:
+		return "SET NULL"
+	default:
+		return "INVALID"
+	}
+}
+
+// ReducedString returns the SQL reference option in uppercase. All reference options are functionally equivalent to
+// either RESTRICT, CASCADE, or SET NULL, therefore only one those three options are returned.
+func (refOp ForeignKeyReferenceOption) ReducedString() string {
+	switch refOp {
+	case ForeignKeyReferenceOption_DefaultAction, ForeignKeyReferenceOption_NoAction, ForeignKeyReferenceOption_Restrict:
+		return "RESTRICT"
+	case ForeignKeyReferenceOption_Cascade:
+		return "CASCADE"
 	case ForeignKeyReferenceOption_SetNull:
 		return "SET NULL"
 	default:
@@ -467,6 +496,22 @@ func (fk ForeignKey) ValidateData(ctx context.Context, childIdx, parentIdx types
 		}
 		if err != nil {
 			return err
+		}
+
+		// Check if there are any NULL values, as they should be skipped
+		hasNulls := false
+		_, err = childIdxRow.IterSchema(childDef.Schema(), func(tag uint64, val types.Value) (stop bool, err error) {
+			if types.IsNull(val) {
+				hasNulls = true
+				return true, nil
+			}
+			return false, nil
+		})
+		if err != nil {
+			return err
+		}
+		if hasNulls {
+			continue
 		}
 
 		parentIdxRow, err := rc.Convert(childIdxRow)

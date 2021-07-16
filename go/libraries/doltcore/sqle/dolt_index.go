@@ -35,6 +35,7 @@ type DoltIndex interface {
 	IndexSchema() schema.Schema
 	TableData() types.Map
 	IndexRowData() types.Map
+	Equals(index DoltIndex) bool
 }
 
 type doltIndex struct {
@@ -49,6 +50,7 @@ type doltIndex struct {
 	tableSch     schema.Schema
 	unique       bool
 	comment      string
+	generated    bool
 }
 
 //TODO: have queries using IS NULL make use of indexes
@@ -224,6 +226,11 @@ func (di *doltIndex) IndexType() string {
 	return "BTREE"
 }
 
+// IsGenerated implements sql.Index
+func (di *doltIndex) IsGenerated() bool {
+	return di.generated
+}
+
 // Schema returns the dolt table schema of this index.
 func (di *doltIndex) Schema() schema.Schema {
 	return di.tableSch
@@ -266,4 +273,52 @@ func (di *doltIndex) keysToTuple(keys []interface{}) (types.Tuple, error) {
 		vals = append(vals, types.Uint(col.Tag), val)
 	}
 	return types.NewTuple(nbf, vals...)
+}
+
+func (di *doltIndex) Equals(oIdx DoltIndex) bool {
+	if !expressionsAreEquals(di.Expressions(), oIdx.Expressions()) {
+		return false
+	}
+
+	if di.Database() != oIdx.Database() {
+		return false
+	}
+
+	if di.Table() != oIdx.Table() {
+		return false
+	}
+
+	if di.ID() != oIdx.ID() {
+		return false
+	}
+
+	if di.IsUnique() != oIdx.IsUnique() {
+		return false
+	}
+
+	if !(schema.SchemasAreEqual(di.IndexSchema(), oIdx.IndexSchema())) {
+		return false
+	}
+
+	return true
+}
+
+func expressionsAreEquals(exprs1, exprs2 []string) bool {
+	if exprs1 == nil && exprs2 == nil {
+		return true
+	} else if exprs1 == nil || exprs2 == nil {
+		return false
+	}
+
+	if len(exprs1) != len(exprs2) {
+		return false
+	}
+
+	for i, expr1 := range exprs1 {
+		if expr1 != exprs2[i] {
+			return false
+		}
+	}
+
+	return true
 }

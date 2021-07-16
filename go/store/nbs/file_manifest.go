@@ -24,6 +24,7 @@ package nbs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -33,6 +34,7 @@ import (
 
 	"github.com/dolthub/fslock"
 
+	"github.com/dolthub/dolt/go/libraries/utils/file"
 	"github.com/dolthub/dolt/go/store/chunks"
 	"github.com/dolthub/dolt/go/store/hash"
 	"github.com/dolthub/dolt/go/store/util/tempfiles"
@@ -54,9 +56,15 @@ type manifestWriter func(temp io.Writer, contents manifestContents) error
 type manifestChecker func(upstream, contents manifestContents) error
 
 // ParseManifest parses s a manifest file from the supplied reader
-func ParseManifest(r io.Reader) (ManifestInfo, error) {
-	fm5 := fileManifestV5{}
-	return fm5.parseManifest(r)
+func ParseManifest(version int, r io.Reader) (ManifestInfo, error) {
+	switch version {
+	case 4:
+		return fileManifestV4{}.parseManifest(r)
+	case 5:
+		return fileManifestV5{}.parseManifest(r)
+	default:
+		return nil, fmt.Errorf("unknown manifest version: %d", version)
+	}
 }
 
 func MaybeMigrateFileManifest(ctx context.Context, dir string) (bool, error) {
@@ -144,6 +152,8 @@ type fileManifestV5 struct {
 	dir string
 }
 
+var _ manifestVersionGetter = &fileManifestV5{}
+
 func newLock(dir string) *fslock.Lock {
 	lockPath := filepath.Join(dir, lockFileName)
 	return fslock.New(lockPath)
@@ -180,6 +190,10 @@ func openIfExists(path string) (*os.File, error) {
 
 func (fm5 fileManifestV5) Name() string {
 	return fm5.dir
+}
+
+func (fm5 fileManifestV5) GetManifestVersion() string {
+	return "5"
 }
 
 // ParseIfExists looks for a LOCK and manifest file in fm.dir. If it finds
@@ -245,18 +259,19 @@ func (fm5 fileManifestV5) parseManifest(r io.Reader) (manifestContents, error) {
 	}
 
 	specs, err := parseSpecs(slices[prefixLen:])
-
 	if err != nil {
 		return manifestContents{}, err
 	}
 
 	lock, err := parseAddr(slices[2])
-
 	if err != nil {
 		return manifestContents{}, err
 	}
 
 	gcGen, err := parseAddr(slices[4])
+	if err != nil {
+		return manifestContents{}, err
+	}
 
 	return manifestContents{
 		vers:  slices[1],
@@ -286,8 +301,14 @@ type fileManifestV4 struct {
 	dir string
 }
 
+var _ manifestVersionGetter = &fileManifestV4{}
+
 func (fm4 fileManifestV4) Name() string {
 	return fm4.dir
+}
+
+func (fm4 fileManifestV4) GetManifestVersion() string {
+	return "4"
 }
 
 func (fm4 fileManifestV4) ParseIfExists(ctx context.Context, stats *Stats, readHook func() error) (exists bool, contents manifestContents, err error) {
@@ -364,20 +385,18 @@ func parseIfExistsWithParser(_ context.Context, dir string, parse manifestParser
 		return false, manifestContents{}, err
 	}
 
-	// !exists(lockFileName) => unitialized store
+	// !exists(lockFileName) => uninitialized store
 	if locked {
-		var f io.ReadCloser
+		var f *os.File
 		err = func() (ferr error) {
 			lck := newLock(dir)
 			ferr = lck.Lock()
-
 			if ferr != nil {
 				return ferr
 			}
 
 			defer func() {
 				unlockErr := lck.Unlock()
-
 				if ferr == nil {
 					ferr = unlockErr
 				}
@@ -395,7 +414,6 @@ func parseIfExistsWithParser(_ context.Context, dir string, parse manifestParser
 			if ferr != nil {
 				return ferr
 			}
-
 			return nil
 		}()
 
@@ -421,7 +439,6 @@ func parseIfExistsWithParser(_ context.Context, dir string, parse manifestParser
 			}
 		}
 	}
-
 	return exists, contents, nil
 }
 
@@ -459,7 +476,7 @@ func updateWithParseWriterAndChecker(_ context.Context, dir string, write manife
 		return manifestContents{}, err
 	}
 
-	defer os.Remove(tempManifestPath) // If we rename below, this will be a no-op
+	defer file.Remove(tempManifestPath) // If we rename below, this will be a no-op
 
 	// Take manifest file lock
 	lck := newLock(dir)
@@ -494,7 +511,7 @@ func updateWithParseWriterAndChecker(_ context.Context, dir string, write manife
 			defer func() {
 				closeErr := f.Close()
 
-				if ferr != nil {
+				if ferr == nil {
 					ferr = closeErr
 				}
 			}()
@@ -536,8 +553,7 @@ func updateWithParseWriterAndChecker(_ context.Context, dir string, write manife
 		return manifestContents{}, err
 	}
 
-	err = os.Rename(tempManifestPath, manifestPath)
-
+	err = file.Rename(tempManifestPath, manifestPath)
 	if err != nil {
 		return manifestContents{}, err
 	}

@@ -88,6 +88,15 @@ type ChunkStore interface {
 	io.Closer
 }
 
+type DebugLogger interface {
+	Logf(fmt string, args ...interface{})
+}
+
+type LoggingChunkStore interface {
+	ChunkStore
+	SetLogger(logger DebugLogger)
+}
+
 // ChunkStoreGarbageCollector is a ChunkStore that supports garbage collection.
 type ChunkStoreGarbageCollector interface {
 	ChunkStore
@@ -98,6 +107,15 @@ type ChunkStoreGarbageCollector interface {
 	// chunks sent on |keepChunks| and will have removed all other content
 	// from the ChunkStore.
 	MarkAndSweepChunks(ctx context.Context, last hash.Hash, keepChunks <-chan []hash.Hash) error
+}
+
+// ChunkStoreVersionGetter is a ChunkStore that supports getting the manifest's
+// storage version
+type ChunkStoreVersionGetter interface {
+	ChunkStore
+
+	// GetManifestStorageVersion returns the storage version of the Chunkstore's manifest
+	GetManifestStorageVersion(ctx context.Context) (string, error)
 }
 
 var ErrUnsupportedOperation = errors.New("operation not supported")

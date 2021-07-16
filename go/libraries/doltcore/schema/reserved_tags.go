@@ -14,6 +14,8 @@
 
 package schema
 
+import "math"
+
 // ** WARNING - DO NOT CHANGE **
 //
 // consistency in these values
@@ -81,4 +83,17 @@ const (
 const (
 	KeylessRowIdTag = iota + SystemTableReservedMin + uint64(5000)
 	KeylessRowCardinalityTag
+)
+
+// Tags for the dolt_procedures table
+const (
+	DoltProceduresNameTag = iota + SystemTableReservedMin + uint64(6000)
+	DoltProceduresCreateStmtTag
+	DoltProceduresCreatedAtTag
+	DoltProceduresModifiedAtTag
+)
+
+const (
+	DoltConstraintViolationsTypeTag = 0
+	DoltConstraintViolationsInfoTag = math.MaxUint64
 )

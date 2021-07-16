@@ -29,7 +29,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/dolthub/dolt/go/libraries/utils/file"
 	"github.com/dolthub/dolt/go/store/spec"
 	"github.com/dolthub/dolt/go/store/types"
 )
@@ -54,9 +56,9 @@ func (s *testSuite) TestDatabase() {
 	assert := s.NewAssert()
 	val := types.Bool(true)
 	r, err := s.Database.WriteValue(context.Background(), val)
-	assert.NoError(err)
+	require.NoError(s.T, err)
 	v2, err := s.Database.ReadValue(context.Background(), r.TargetHash())
-	assert.NoError(err)
+	require.NoError(s.T, err)
 	assert.True(v2.Equals(val))
 }
 
@@ -70,15 +72,21 @@ func (s *testSuite) TestGlob() {
 	f := s.TempFile()
 	f.Close()
 
-	create := func(suffix string) {
+	create := func(suffix string) error {
 		f, err := os.Create(f.Name() + suffix)
-		assert.NoError(err)
+		if err != nil {
+			return err
+		}
 		f.Close()
+		return nil
 	}
 
-	create("a")
-	create(".a")
-	create(".b")
+	err := create("a")
+	require.NoError(s.T, err)
+	err = create(".a")
+	require.NoError(s.T, err)
+	err = create(".b")
+	require.NoError(s.T, err)
 
 	glob := s.OpenGlob(f.Name() + ".*")
 	assert.Equal(2, len(glob))
@@ -87,7 +95,7 @@ func (s *testSuite) TestGlob() {
 
 	s.CloseGlob(glob)
 	b := make([]byte, 16)
-	_, err := glob[0].Read(b)
+	_, err = glob[0].Read(b)
 	assert.Error(err)
 	_, err = glob[1].Read(b)
 	assert.Error(err)
@@ -167,8 +175,8 @@ func runTestSuite(t *testing.T, mem bool) {
 
 	// Write test results to our own temporary LDB database.
 	ldbDir, err := ioutil.TempDir("", "suite.TestSuite")
-	assert.NoError(err)
-	defer os.RemoveAll(ldbDir)
+	require.NoError(t, err)
+	defer file.RemoveAll(ldbDir)
 
 	flagVal, repeatFlagVal, memFlagVal := *perfFlag, *perfRepeatFlag, *perfMemFlag
 	*perfFlag, *perfRepeatFlag, *perfMemFlag = ldbDir, 3, mem
@@ -207,10 +215,10 @@ func runTestSuite(t *testing.T, mem bool) {
 
 	// The results should have been written to the "ds" dataset.
 	sp, err := spec.ForDataset(ldbDir + "::ds")
-	assert.NoError(err)
+	require.NoError(t, err)
 	defer sp.Close()
 	headVal, ok, err := sp.GetDataset(context.Background()).MaybeHeadValue()
-	assert.NoError(err)
+	require.NoError(t, err)
 	assert.True(ok)
 	head := headVal.(types.Struct)
 
@@ -218,7 +226,7 @@ func runTestSuite(t *testing.T, mem bool) {
 
 	getOrFail := func(s types.Struct, f string) types.Value {
 		val, ok, err := s.MaybeGet(f)
-		assert.NoError(err)
+		require.NoError(t, err)
 		assert.True(ok)
 		return val
 	}
@@ -268,12 +276,12 @@ func runTestSuite(t *testing.T, mem bool) {
 			return nil
 		})
 
-		assert.NoError(err)
+		require.NoError(t, err)
 		assert.Equal(i, len(expectedTests))
 		return nil
 	})
 
-	assert.NoError(err)
+	require.NoError(t, err)
 }
 
 func TestPrefixFlag(t *testing.T) {
@@ -282,8 +290,8 @@ func TestPrefixFlag(t *testing.T) {
 
 	// Write test results to a temporary database.
 	ldbDir, err := ioutil.TempDir("", "suite.TestSuite")
-	assert.NoError(err)
-	defer os.RemoveAll(ldbDir)
+	require.NoError(t, err)
+	defer file.RemoveAll(ldbDir)
 
 	flagVal, prefixFlagVal := *perfFlag, *perfPrefixFlag
 	*perfFlag, *perfPrefixFlag = ldbDir, "foo/"
@@ -295,16 +303,16 @@ func TestPrefixFlag(t *testing.T) {
 
 	// The results should have been written to "foo/my-prefix/test" not "my-prefix/test".
 	sp, err := spec.ForDataset(ldbDir + "::my-prefix/test")
-	assert.NoError(err)
+	require.NoError(t, err)
 	defer sp.Close()
 	_, ok := sp.GetDataset(context.Background()).MaybeHead()
 	assert.False(ok)
 
 	sp, err = spec.ForDataset(ldbDir + "::foo/my-prefix/test")
-	assert.NoError(err)
+	require.NoError(t, err)
 	defer sp.Close()
 	_, ok, err = sp.GetDataset(context.Background()).MaybeHeadValue()
-	assert.NoError(err)
+	require.NoError(t, err)
 	assert.True(ok)
 }
 

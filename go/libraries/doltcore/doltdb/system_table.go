@@ -27,7 +27,7 @@ import (
 
 const (
 	// DoltNamespace is the name prefix of dolt system tables. We reserve all tables that begin with dolt_ for system use.
-	DoltNamespace = "dolt_"
+	DoltNamespace = "dolt"
 )
 
 var ErrSystemTableCannotBeModified = errors.New("system tables cannot be dropped or altered")
@@ -35,7 +35,7 @@ var ErrSystemTableCannotBeModified = errors.New("system tables cannot be dropped
 // HasDoltPrefix returns a boolean whether or not the provided string is prefixed with the DoltNamespace. Users should
 // not be able to create tables in this reserved namespace.
 func HasDoltPrefix(s string) bool {
-	return strings.HasPrefix(s, DoltNamespace)
+	return strings.HasPrefix(strings.ToLower(s), DoltNamespace)
 }
 
 // IsReadOnlySystemTable returns whether the table name given is a system table that should not be included in command line
@@ -120,18 +120,21 @@ func GetAllTableNames(ctx context.Context, root *RootValue) ([]string, error) {
 var writeableSystemTables = []string{
 	DoltQueryCatalogTableName,
 	SchemasTableName,
+	ProceduresTableName,
 }
 
 var persistedSystemTables = []string{
 	DocTableName,
 	DoltQueryCatalogTableName,
 	SchemasTableName,
+	ProceduresTableName,
 }
 
 var generatedSystemTables = []string{
 	BranchesTableName,
 	LogTableName,
 	TableOfTablesInConflictName,
+	TableOfTablesWithViolationsName,
 	CommitsTableName,
 	CommitAncestorsTableName,
 	StatusTableName,
@@ -142,6 +145,7 @@ var generatedSystemTablePrefixes = []string{
 	DoltCommitDiffTablePrefix,
 	DoltHistoryTablePrefix,
 	DoltConfTablePrefix,
+	DoltConstViolTablePrefix,
 }
 
 const (
@@ -192,12 +196,14 @@ const (
 const (
 	// DoltHistoryTablePrefix is the prefix assigned to all the generated history tables
 	DoltHistoryTablePrefix = "dolt_history_"
-	// DoltdDiffTablePrefix is the prefix assigned to all the generated diff tables
+	// DoltDiffTablePrefix is the prefix assigned to all the generated diff tables
 	DoltDiffTablePrefix = "dolt_diff_"
 	// DoltCommitDiffTablePrefix is the prefix assigned to all the generated commit diff tables
 	DoltCommitDiffTablePrefix = "dolt_commit_diff_"
 	// DoltConfTablePrefix is the prefix assigned to all the generated conflict tables
 	DoltConfTablePrefix = "dolt_conflicts_"
+	// DoltConstViolTablePrefix is the prefix assigned to all the generated constraint violation tables
+	DoltConstViolTablePrefix = "dolt_constraint_violations_"
 )
 
 const (
@@ -206,6 +212,9 @@ const (
 
 	// TableOfTablesInConflictName is the conflicts system table name
 	TableOfTablesInConflictName = "dolt_conflicts"
+
+	// TableOfTablesWithViolationsName is the constraint violations system table name
+	TableOfTablesWithViolationsName = "dolt_constraint_violations"
 
 	// BranchesTableName is the branches system table name
 	BranchesTableName = "dolt_branches"
@@ -218,4 +227,17 @@ const (
 
 	// StatusTableName is the status system table name.
 	StatusTableName = "dolt_status"
+)
+
+const (
+	// ProceduresTableName is the name of the dolt stored procedures table.
+	ProceduresTableName = "dolt_procedures"
+	// ProceduresTableNameCol is the name of the stored procedure. Using CREATE PROCEDURE, will always be lowercase.
+	ProceduresTableNameCol = "name"
+	// ProceduresTableCreateStmtCol is the CREATE PROCEDURE statement for this stored procedure.
+	ProceduresTableCreateStmtCol = "create_stmt"
+	// ProceduresTableCreatedAtCol is the time that the stored procedure was created at, in UTC.
+	ProceduresTableCreatedAtCol = "created_at"
+	// ProceduresTableModifiedAtCol is the time that the stored procedure was last modified, in UTC.
+	ProceduresTableModifiedAtCol = "modified_at"
 )

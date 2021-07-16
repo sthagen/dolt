@@ -108,8 +108,10 @@ import (
 	"github.com/shirou/gopsutil/host"
 	"github.com/shirou/gopsutil/mem"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	testifySuite "github.com/stretchr/testify/suite"
 
+	"github.com/dolthub/dolt/go/libraries/utils/file"
 	"github.com/dolthub/dolt/go/libraries/utils/osutil"
 	"github.com/dolthub/dolt/go/store/chunks"
 	"github.com/dolthub/dolt/go/store/datas"
@@ -190,6 +192,7 @@ func (r nopWriter) Write(p []byte) (int, error) {
 
 // Run runs suiteT and writes results to dataset datasetID in the database given by the -perf command line flag.
 func Run(datasetID string, t *testing.T, suiteT perfSuiteT) {
+	t.Skip()
 	assert := assert.New(t)
 
 	if !assert.NotEqual("", datasetID) {
@@ -227,10 +230,10 @@ func Run(datasetID string, t *testing.T, suiteT perfSuiteT) {
 	defer func() {
 		for _, f := range suite.tempFiles {
 			f.Close()
-			os.Remove(f.Name())
+			file.Remove(f.Name())
 		}
 		for _, d := range suite.tempDirs {
-			os.RemoveAll(d)
+			file.RemoveAll(d)
 		}
 	}()
 
@@ -266,25 +269,26 @@ func Run(datasetID string, t *testing.T, suiteT perfSuiteT) {
 					"total":   types.Float(info.total.Nanoseconds()),
 				})
 
-				assert.NoError(err)
+				require.NoError(t, err)
 				timesSlice = append(timesSlice, types.String(name), st)
 			}
 			reps[i], err = types.NewMap(context.Background(), db, timesSlice...)
 		}
 
 		l, err := types.NewList(context.Background(), db, reps...)
-		assert.NoError(err)
+		require.NoError(t, err)
 		record, err := types.NewStruct(db.Format(), "", map[string]types.Value{
 			"environment":      suite.getEnvironment(db),
 			"nomsRevision":     types.String(suite.getGitHead(path.Join(suite.AtticLabs, "noms"))),
 			"testdataRevision": types.String(suite.getGitHead(suite.Testdata)),
 			"reps":             l,
 		})
+		require.NoError(t, err)
 
 		ds, err := db.GetDataset(context.Background(), *perfPrefixFlag+datasetID)
-		assert.NoError(err)
+		require.NoError(t, err)
 		_, err = db.CommitValue(context.Background(), ds, record)
-		assert.NoError(err)
+		require.NoError(t, err)
 	}()
 
 	if t, ok := suiteT.(testifySuite.SetupAllSuite); ok {
@@ -379,7 +383,7 @@ func (suite *PerfSuite) NewAssert() *assert.Assertions {
 // the perf test suite. Files will be prefixed with the test's dataset ID
 func (suite *PerfSuite) TempFile() *os.File {
 	f, err := ioutil.TempFile("", suite.tempPrefix())
-	assert.NoError(suite.T, err)
+	require.NoError(suite.T, err)
 	suite.tempFiles = append(suite.tempFiles, f)
 	return f
 }
@@ -389,7 +393,7 @@ func (suite *PerfSuite) TempFile() *os.File {
 // dataset ID.
 func (suite *PerfSuite) TempDir() string {
 	d, err := ioutil.TempDir("", suite.tempPrefix())
-	assert.NoError(suite.T, err)
+	require.NoError(suite.T, err)
 	suite.tempDirs = append(suite.tempDirs, d)
 	return d
 }
@@ -412,15 +416,13 @@ func (suite *PerfSuite) Pause(fn func()) {
 // Large CSV files in testdata are broken up into foo.a, foo.b, etc to get
 // around GitHub file size restrictions.
 func (suite *PerfSuite) OpenGlob(pattern ...string) []io.Reader {
-	assert := suite.NewAssert()
-
 	glob, err := filepath.Glob(path.Join(pattern...))
-	assert.NoError(err)
+	require.NoError(suite.T, err)
 
 	files := make([]io.Reader, len(glob))
 	for i, m := range glob {
 		f, err := os.Open(m)
-		assert.NoError(err)
+		require.NoError(suite.T, err)
 		files[i] = f
 	}
 
@@ -429,9 +431,8 @@ func (suite *PerfSuite) OpenGlob(pattern ...string) []io.Reader {
 
 // CloseGlob closes all of the files, designed to be used with OpenGlob.
 func (suite *PerfSuite) CloseGlob(files []io.Reader) {
-	assert := suite.NewAssert()
 	for _, f := range files {
-		assert.NoError(f.(*os.File).Close())
+		require.NoError(suite.T, f.(*os.File).Close())
 	}
 }
 
@@ -452,8 +453,6 @@ func callSafe(name string, fun reflect.Value, args ...interface{}) (err error) {
 }
 
 func (suite *PerfSuite) getEnvironment(vrw types.ValueReadWriter) types.Value {
-	assert := suite.NewAssert()
-
 	env := environment{
 		DiskUsages: map[string]disk.UsageStat{},
 		Cpus:       map[int]cpu.InfoStat{},
@@ -461,30 +460,30 @@ func (suite *PerfSuite) getEnvironment(vrw types.ValueReadWriter) types.Value {
 	}
 
 	partitions, err := disk.Partitions(false)
-	assert.NoError(err)
+	require.NoError(suite.T, err)
 	for _, p := range partitions {
 		usage, err := disk.Usage(p.Mountpoint)
-		assert.NoError(err)
+		require.NoError(suite.T, err)
 		env.DiskUsages[p.Mountpoint] = *usage
 		env.Partitions[p.Device] = p
 	}
 
 	cpus, err := cpu.Info()
-	assert.NoError(err)
+	require.NoError(suite.T, err)
 	for i, c := range cpus {
 		env.Cpus[i] = c
 	}
 
 	mem, err := mem.VirtualMemory()
-	assert.NoError(err)
+	require.NoError(suite.T, err)
 	env.Mem = *mem
 
 	hostInfo, err := host.Info()
-	assert.NoError(err)
+	require.NoError(suite.T, err)
 	env.Host = *hostInfo
 
 	envStruct, err := marshal.Marshal(context.Background(), vrw, env)
-	assert.NoError(err)
+	require.NoError(suite.T, err)
 	return envStruct
 }
 

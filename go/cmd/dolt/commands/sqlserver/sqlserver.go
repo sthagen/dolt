@@ -21,7 +21,6 @@ import (
 	"strconv"
 
 	"github.com/fatih/color"
-	"gopkg.in/yaml.v2"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/cli"
 	"github.com/dolthub/dolt/go/cmd/dolt/commands"
@@ -43,6 +42,7 @@ const (
 	noAutoCommitFlag     = "no-auto-commit"
 	configFileFlag       = "config"
 	queryParallelismFlag = "query-parallelism"
+	maxConnectionsFlag   = "max-connections"
 )
 
 var sqlServerDocs = cli.CommandDocumentationContent{
@@ -128,6 +128,7 @@ func (cmd SqlServerCmd) CreateArgParser() *argparser.ArgParser {
 	ap.SupportsString(multiDBDirFlag, "", "directory", "Defines a directory whose subdirectories should all be dolt data repositories accessible as independent databases.")
 	ap.SupportsFlag(noAutoCommitFlag, "", "When provided sessions will not automatically commit their changes to the working set. Anything not manually committed will be lost.")
 	ap.SupportsInt(queryParallelismFlag, "", "num-go-routines", fmt.Sprintf("Set the number of go routines spawned to handle each query (default `%d`)", serverConfig.QueryParallelism()))
+	ap.SupportsInt(maxConnectionsFlag, "", "max-connections", fmt.Sprintf("Set the number of connections handled by the server (default `%d`)", serverConfig.MaxConnections()))
 	return ap
 }
 
@@ -153,7 +154,7 @@ func startServer(ctx context.Context, versionStr, commandStr string, args []stri
 	ap := SqlServerCmd{}.CreateArgParser()
 	help, _ := cli.HelpAndUsagePrinters(cli.GetCommandDocumentation(commandStr, sqlServerDocs, ap))
 
-	apr := cli.ParseArgs(ap, args, help)
+	apr := cli.ParseArgsOrDie(ap, args, help)
 	serverConfig, err := GetServerConfig(dEnv, apr)
 
 	if err != nil {
@@ -240,20 +241,21 @@ func getCommandLineServerConfig(dEnv *env.DoltEnv, apr *argparser.ArgParseResult
 		serverConfig.withQueryParallelism(queryParallelism)
 	}
 
+	if maxConnections, ok := apr.GetInt(maxConnectionsFlag); ok {
+		serverConfig.withMaxConnections(uint64(maxConnections))
+	}
+
 	serverConfig.autoCommit = !apr.Contains(noAutoCommitFlag)
 	return serverConfig, nil
 }
 
 func getYAMLServerConfig(fs filesys.Filesys, path string) (ServerConfig, error) {
 	data, err := fs.ReadFile(path)
-
 	if err != nil {
 		return nil, fmt.Errorf("Failed to read file '%s'. Error: %s", path, err.Error())
 	}
 
-	var cfg YAMLConfig
-	err = yaml.Unmarshal(data, &cfg)
-
+	cfg, err := NewYamlConfig(data)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to parse yaml file '%s'. Error: %s", path, err.Error())
 	}

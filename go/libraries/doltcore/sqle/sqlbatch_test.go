@@ -28,6 +28,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/dtestutils"
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	. "github.com/dolthub/dolt/go/libraries/doltcore/sql/sqltestutil"
+	"github.com/dolthub/dolt/go/libraries/doltcore/sqle/dsess"
 	"github.com/dolthub/dolt/go/store/types"
 )
 
@@ -63,9 +64,10 @@ func TestSqlBatchInserts(t *testing.T) {
 	CreateTestDatabase(dEnv, t)
 	root, _ := dEnv.WorkingRoot(ctx)
 
-	db := NewBatchedDatabase("dolt", dEnv.DbData())
-	engine, sqlCtx, err := NewTestEngine(ctx, db, root)
+	db := NewDatabase("dolt", dEnv.DbData())
+	engine, sqlCtx, err := NewTestEngine(t, dEnv, ctx, db, root)
 	require.NoError(t, err)
+	dsess.DSessFromSess(sqlCtx.Session).EnableBatchedMode()
 
 	for _, stmt := range insertStatements {
 		_, rowIter, err := engine.Query(sqlCtx, stmt)
@@ -151,9 +153,10 @@ func TestSqlBatchInsertIgnoreReplace(t *testing.T) {
 	CreateTestDatabase(dEnv, t)
 	root, _ := dEnv.WorkingRoot(ctx)
 
-	db := NewBatchedDatabase("dolt", dEnv.DbData())
-	engine, sqlCtx, err := NewTestEngine(ctx, db, root)
+	db := NewDatabase("dolt", dEnv.DbData())
+	engine, sqlCtx, err := NewTestEngine(t, dEnv, ctx, db, root)
 	require.NoError(t, err)
+	dsess.DSessFromSess(sqlCtx.Session).EnableBatchedMode()
 
 	for _, stmt := range insertStatements {
 		_, rowIter, err := engine.Query(sqlCtx, stmt)
@@ -189,9 +192,10 @@ func TestSqlBatchInsertErrors(t *testing.T) {
 	CreateTestDatabase(dEnv, t)
 	root, _ := dEnv.WorkingRoot(ctx)
 
-	db := NewBatchedDatabase("dolt", dEnv.DbData())
-	engine, sqlCtx, err := NewTestEngine(ctx, db, root)
+	db := NewDatabase("dolt", dEnv.DbData())
+	engine, sqlCtx, err := NewTestEngine(t, dEnv, ctx, db, root)
 	require.NoError(t, err)
+	dsess.DSessFromSess(sqlCtx.Session).EnableBatchedMode()
 
 	_, rowIter, err := engine.Query(sqlCtx, `insert into people (id, first_name, last_name, is_married, age, rating, uuid, num_episodes) values
 					(0, "Maggie", "Simpson", false, 1, 5.1, '00000000-0000-0000-0000-000000000007', 677)`)
@@ -274,7 +278,7 @@ func newPeopleRow(id int, firstName, lastName string) row.Row {
 		LastNameTag:  types.String(lastName),
 	}
 
-	r, err := row.New(types.Format_7_18, PeopleTestSchema, vals)
+	r, err := row.New(types.Format_Default, PeopleTestSchema, vals)
 
 	if err != nil {
 		panic(err)
@@ -289,7 +293,7 @@ func newEpsRow(id int, name string) row.Row {
 		EpNameTag:    types.String(name),
 	}
 
-	r, err := row.New(types.Format_7_18, EpisodesTestSchema, vals)
+	r, err := row.New(types.Format_Default, EpisodesTestSchema, vals)
 
 	if err != nil {
 		panic(err)
@@ -304,7 +308,7 @@ func newAppsRow(charId int, epId int) row.Row {
 		AppEpTag:        types.Int(epId),
 	}
 
-	r, err := row.New(types.Format_7_18, AppearancesTestSchema, vals)
+	r, err := row.New(types.Format_Default, AppearancesTestSchema, vals)
 
 	if err != nil {
 		panic(err)

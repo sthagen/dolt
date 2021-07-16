@@ -55,7 +55,7 @@ var id2, _ = uuid.NewRandom()
 var id3, _ = uuid.NewRandom()
 
 func TestIndexEditorConcurrency(t *testing.T) {
-	format := types.Format_7_18
+	format := types.Format_Default
 	db, err := dbfactory.MemFactory{}.CreateDB(context.Background(), format, nil, nil)
 	require.NoError(t, err)
 	colColl := schema.NewColCollection(
@@ -71,7 +71,7 @@ func TestIndexEditorConcurrency(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := 0; i < indexEditorConcurrencyIterations; i++ {
-		indexEditor := NewIndexEditor(index, emptyMap)
+		indexEditor := NewIndexEditor(context.Background(), index, emptyMap, tableSch)
 		wg := &sync.WaitGroup{}
 
 		for j := 0; j < indexEditorConcurrencyFinalCount*2; j++ {
@@ -82,7 +82,9 @@ func TestIndexEditorConcurrency(t *testing.T) {
 					1: types.Int(val),
 				})
 				require.NoError(t, err)
-				require.NoError(t, indexEditor.UpdateIndex(context.Background(), nil, dRow))
+				fullKey, partialKey, err := row.ReduceToIndexKeys(index, dRow)
+				require.NoError(t, err)
+				require.NoError(t, indexEditor.InsertRow(context.Background(), fullKey, partialKey))
 				wg.Done()
 			}(j)
 		}
@@ -101,7 +103,12 @@ func TestIndexEditorConcurrency(t *testing.T) {
 					1: types.Int(val + 1),
 				})
 				require.NoError(t, err)
-				require.NoError(t, indexEditor.UpdateIndex(context.Background(), dOldRow, dNewRow))
+				oldFullKey, oldPartialKey, err := row.ReduceToIndexKeys(index, dOldRow)
+				require.NoError(t, err)
+				require.NoError(t, indexEditor.DeleteRow(context.Background(), oldFullKey, oldPartialKey))
+				newFullKey, newPartialKey, err := row.ReduceToIndexKeys(index, dNewRow)
+				require.NoError(t, err)
+				require.NoError(t, indexEditor.InsertRow(context.Background(), newFullKey, newPartialKey))
 				wg.Done()
 			}(j)
 		}
@@ -115,7 +122,9 @@ func TestIndexEditorConcurrency(t *testing.T) {
 					1: types.Int(val),
 				})
 				require.NoError(t, err)
-				require.NoError(t, indexEditor.UpdateIndex(context.Background(), dRow, nil))
+				fullKey, partialKey, err := row.ReduceToIndexKeys(index, dRow)
+				require.NoError(t, err)
+				require.NoError(t, indexEditor.DeleteRow(context.Background(), fullKey, partialKey))
 				wg.Done()
 			}(j)
 		}
@@ -128,7 +137,7 @@ func TestIndexEditorConcurrency(t *testing.T) {
 			_ = newIndexData.IterAll(context.Background(), func(key, value types.Value) error {
 				dReadRow, err := row.FromNoms(indexSch, key.(types.Tuple), value.(types.Tuple))
 				require.NoError(t, err)
-				dReadVals, err := row.GetTaggedVals(dReadRow)
+				dReadVals, err := dReadRow.TaggedValues()
 				require.NoError(t, err)
 				assert.Equal(t, row.TaggedValues{
 					0: types.Int(iterIndex),
@@ -142,7 +151,7 @@ func TestIndexEditorConcurrency(t *testing.T) {
 }
 
 func TestIndexEditorConcurrencyPostInsert(t *testing.T) {
-	format := types.Format_7_18
+	format := types.Format_Default
 	db, err := dbfactory.MemFactory{}.CreateDB(context.Background(), format, nil, nil)
 	require.NoError(t, err)
 	colColl := schema.NewColCollection(
@@ -157,20 +166,22 @@ func TestIndexEditorConcurrencyPostInsert(t *testing.T) {
 	emptyMap, err := types.NewMap(context.Background(), db)
 	require.NoError(t, err)
 
-	indexEditor := NewIndexEditor(index, emptyMap)
+	indexEditor := NewIndexEditor(context.Background(), index, emptyMap, tableSch)
 	for i := 0; i < indexEditorConcurrencyFinalCount*2; i++ {
 		dRow, err := row.New(format, indexSch, row.TaggedValues{
 			0: types.Int(i),
 			1: types.Int(i),
 		})
 		require.NoError(t, err)
-		require.NoError(t, indexEditor.UpdateIndex(context.Background(), nil, dRow))
+		fullKey, partialKey, err := row.ReduceToIndexKeys(index, dRow)
+		require.NoError(t, err)
+		require.NoError(t, indexEditor.InsertRow(context.Background(), fullKey, partialKey))
 	}
 	indexData, err := indexEditor.Map(context.Background())
 	require.NoError(t, err)
 
 	for i := 0; i < indexEditorConcurrencyIterations; i++ {
-		indexEditor := NewIndexEditor(index, indexData)
+		indexEditor := NewIndexEditor(context.Background(), index, indexData, tableSch)
 		wg := &sync.WaitGroup{}
 
 		for j := 0; j < indexEditorConcurrencyFinalCount; j++ {
@@ -186,7 +197,12 @@ func TestIndexEditorConcurrencyPostInsert(t *testing.T) {
 					1: types.Int(val + 1),
 				})
 				require.NoError(t, err)
-				require.NoError(t, indexEditor.UpdateIndex(context.Background(), dOldRow, dNewRow))
+				oldFullKey, oldPartialKey, err := row.ReduceToIndexKeys(index, dOldRow)
+				require.NoError(t, err)
+				require.NoError(t, indexEditor.DeleteRow(context.Background(), oldFullKey, oldPartialKey))
+				newFullKey, newPartialKey, err := row.ReduceToIndexKeys(index, dNewRow)
+				require.NoError(t, err)
+				require.NoError(t, indexEditor.InsertRow(context.Background(), newFullKey, newPartialKey))
 				wg.Done()
 			}(j)
 		}
@@ -199,7 +215,9 @@ func TestIndexEditorConcurrencyPostInsert(t *testing.T) {
 					1: types.Int(val),
 				})
 				require.NoError(t, err)
-				require.NoError(t, indexEditor.UpdateIndex(context.Background(), dRow, nil))
+				fullKey, partialKey, err := row.ReduceToIndexKeys(index, dRow)
+				require.NoError(t, err)
+				require.NoError(t, indexEditor.DeleteRow(context.Background(), fullKey, partialKey))
 				wg.Done()
 			}(j)
 		}
@@ -212,94 +230,7 @@ func TestIndexEditorConcurrencyPostInsert(t *testing.T) {
 			_ = newIndexData.IterAll(context.Background(), func(key, value types.Value) error {
 				dReadRow, err := row.FromNoms(indexSch, key.(types.Tuple), value.(types.Tuple))
 				require.NoError(t, err)
-				dReadVals, err := row.GetTaggedVals(dReadRow)
-				require.NoError(t, err)
-				assert.Equal(t, row.TaggedValues{
-					0: types.Int(iterIndex),
-					1: types.Int(iterIndex + 1),
-				}, dReadVals)
-				iterIndex++
-				return nil
-			})
-		}
-	}
-}
-
-func TestIndexEditorConcurrencyUnique(t *testing.T) {
-	format := types.Format_7_18
-	db, err := dbfactory.MemFactory{}.CreateDB(context.Background(), format, nil, nil)
-	require.NoError(t, err)
-	colColl := schema.NewColCollection(
-		schema.NewColumn("pk", 0, types.IntKind, true),
-		schema.NewColumn("v1", 1, types.IntKind, false),
-		schema.NewColumn("v2", 2, types.IntKind, false))
-	tableSch, err := schema.SchemaFromCols(colColl)
-	require.NoError(t, err)
-	index, err := tableSch.Indexes().AddIndexByColNames("idx_concurrency", []string{"v1"}, schema.IndexProperties{IsUnique: true, Comment: ""})
-	require.NoError(t, err)
-	indexSch := index.Schema()
-	emptyMap, err := types.NewMap(context.Background(), db)
-	require.NoError(t, err)
-
-	for i := 0; i < indexEditorConcurrencyIterations; i++ {
-		indexEditor := NewIndexEditor(index, emptyMap)
-		wg := &sync.WaitGroup{}
-
-		for j := 0; j < indexEditorConcurrencyFinalCount*2; j++ {
-			wg.Add(1)
-			go func(val int) {
-				dRow, err := row.New(format, indexSch, row.TaggedValues{
-					0: types.Int(val),
-					1: types.Int(val),
-				})
-				require.NoError(t, err)
-				require.NoError(t, indexEditor.UpdateIndex(context.Background(), nil, dRow))
-				wg.Done()
-			}(j)
-		}
-		wg.Wait()
-
-		for j := 0; j < indexEditorConcurrencyFinalCount; j++ {
-			wg.Add(1)
-			go func(val int) {
-				dOldRow, err := row.New(format, indexSch, row.TaggedValues{
-					0: types.Int(val),
-					1: types.Int(val),
-				})
-				require.NoError(t, err)
-				dNewRow, err := row.New(format, indexSch, row.TaggedValues{
-					0: types.Int(val),
-					1: types.Int(val + 1),
-				})
-				require.NoError(t, err)
-				require.NoError(t, indexEditor.UpdateIndex(context.Background(), dOldRow, dNewRow))
-				wg.Done()
-			}(j)
-		}
-
-		// We let the Updates and Deletes execute at the same time
-		for j := indexEditorConcurrencyFinalCount; j < indexEditorConcurrencyFinalCount*2; j++ {
-			wg.Add(1)
-			go func(val int) {
-				dRow, err := row.New(format, indexSch, row.TaggedValues{
-					0: types.Int(val),
-					1: types.Int(val),
-				})
-				require.NoError(t, err)
-				require.NoError(t, indexEditor.UpdateIndex(context.Background(), dRow, nil))
-				wg.Done()
-			}(j)
-		}
-		wg.Wait()
-
-		newIndexData, err := indexEditor.Map(context.Background())
-		require.NoError(t, err)
-		if assert.Equal(t, uint64(indexEditorConcurrencyFinalCount), newIndexData.Len()) {
-			iterIndex := 0
-			_ = newIndexData.IterAll(context.Background(), func(key, value types.Value) error {
-				dReadRow, err := row.FromNoms(indexSch, key.(types.Tuple), value.(types.Tuple))
-				require.NoError(t, err)
-				dReadVals, err := row.GetTaggedVals(dReadRow)
+				dReadVals, err := dReadRow.TaggedValues()
 				require.NoError(t, err)
 				assert.Equal(t, row.TaggedValues{
 					0: types.Int(iterIndex),
@@ -313,7 +244,7 @@ func TestIndexEditorConcurrencyUnique(t *testing.T) {
 }
 
 func TestIndexEditorUniqueMultipleNil(t *testing.T) {
-	format := types.Format_7_18
+	format := types.Format_Default
 	db, err := dbfactory.MemFactory{}.CreateDB(context.Background(), format, nil, nil)
 	require.NoError(t, err)
 	colColl := schema.NewColCollection(
@@ -327,14 +258,16 @@ func TestIndexEditorUniqueMultipleNil(t *testing.T) {
 	emptyMap, err := types.NewMap(context.Background(), db)
 	require.NoError(t, err)
 
-	indexEditor := NewIndexEditor(index, emptyMap)
+	indexEditor := NewIndexEditor(context.Background(), index, emptyMap, tableSch)
 	for i := 0; i < 3; i++ {
 		dRow, err := row.New(format, indexSch, row.TaggedValues{
 			0: types.NullValue,
 			1: types.Int(i),
 		})
 		require.NoError(t, err)
-		require.NoError(t, indexEditor.UpdateIndex(context.Background(), nil, dRow))
+		fullKey, partialKey, err := row.ReduceToIndexKeys(index, dRow)
+		require.NoError(t, err)
+		require.NoError(t, indexEditor.InsertRow(context.Background(), fullKey, partialKey))
 	}
 	newIndexData, err := indexEditor.Map(context.Background())
 	require.NoError(t, err)
@@ -343,7 +276,7 @@ func TestIndexEditorUniqueMultipleNil(t *testing.T) {
 		_ = newIndexData.IterAll(context.Background(), func(key, value types.Value) error {
 			dReadRow, err := row.FromNoms(indexSch, key.(types.Tuple), value.(types.Tuple))
 			require.NoError(t, err)
-			dReadVals, err := row.GetTaggedVals(dReadRow)
+			dReadVals, err := dReadRow.TaggedValues()
 			require.NoError(t, err)
 			assert.Equal(t, row.TaggedValues{
 				1: types.Int(index), // We don't encode NULL values
@@ -355,7 +288,7 @@ func TestIndexEditorUniqueMultipleNil(t *testing.T) {
 }
 
 func TestIndexEditorWriteAfterFlush(t *testing.T) {
-	format := types.Format_7_18
+	format := types.Format_Default
 	db, err := dbfactory.MemFactory{}.CreateDB(context.Background(), format, nil, nil)
 	require.NoError(t, err)
 	colColl := schema.NewColCollection(
@@ -370,7 +303,7 @@ func TestIndexEditorWriteAfterFlush(t *testing.T) {
 	emptyMap, err := types.NewMap(context.Background(), db)
 	require.NoError(t, err)
 
-	indexEditor := NewIndexEditor(index, emptyMap)
+	indexEditor := NewIndexEditor(context.Background(), index, emptyMap, tableSch)
 	require.NoError(t, err)
 
 	for i := 0; i < 20; i++ {
@@ -379,10 +312,13 @@ func TestIndexEditorWriteAfterFlush(t *testing.T) {
 			1: types.Int(i),
 		})
 		require.NoError(t, err)
-		require.NoError(t, indexEditor.UpdateIndex(context.Background(), nil, dRow))
+		fullKey, partialKey, err := row.ReduceToIndexKeys(index, dRow)
+		require.NoError(t, err)
+		require.NoError(t, indexEditor.InsertRow(context.Background(), fullKey, partialKey))
 	}
 
-	require.NoError(t, indexEditor.Flush(context.Background()))
+	_, err = indexEditor.Map(context.Background())
+	require.NoError(t, err)
 
 	for i := 10; i < 20; i++ {
 		dRow, err := row.New(format, indexSch, row.TaggedValues{
@@ -390,7 +326,9 @@ func TestIndexEditorWriteAfterFlush(t *testing.T) {
 			1: types.Int(i),
 		})
 		require.NoError(t, err)
-		require.NoError(t, indexEditor.UpdateIndex(context.Background(), dRow, nil))
+		fullKey, partialKey, err := row.ReduceToIndexKeys(index, dRow)
+		require.NoError(t, err)
+		require.NoError(t, indexEditor.DeleteRow(context.Background(), fullKey, partialKey))
 	}
 
 	newIndexData, err := indexEditor.Map(context.Background())
@@ -400,7 +338,7 @@ func TestIndexEditorWriteAfterFlush(t *testing.T) {
 		_ = newIndexData.IterAll(context.Background(), func(key, value types.Value) error {
 			dReadRow, err := row.FromNoms(indexSch, key.(types.Tuple), value.(types.Tuple))
 			require.NoError(t, err)
-			dReadVals, err := row.GetTaggedVals(dReadRow)
+			dReadVals, err := dReadRow.TaggedValues()
 			require.NoError(t, err)
 			assert.Equal(t, row.TaggedValues{
 				0: types.Int(iterIndex),
@@ -416,8 +354,8 @@ func TestIndexEditorWriteAfterFlush(t *testing.T) {
 	assert.True(t, sameIndexData.Equals(newIndexData))
 }
 
-func TestIndexEditorFlushClearsUniqueError(t *testing.T) {
-	format := types.Format_7_18
+func TestIndexEditorUniqueErrorDoesntPersist(t *testing.T) {
+	format := types.Format_Default
 	db, err := dbfactory.MemFactory{}.CreateDB(context.Background(), format, nil, nil)
 	require.NoError(t, err)
 	colColl := schema.NewColCollection(
@@ -431,27 +369,35 @@ func TestIndexEditorFlushClearsUniqueError(t *testing.T) {
 	emptyMap, err := types.NewMap(context.Background(), db)
 	require.NoError(t, err)
 
-	indexEditor := NewIndexEditor(index, emptyMap)
+	indexEditor := NewIndexEditor(context.Background(), index, emptyMap, tableSch)
 	dRow, err := row.New(format, indexSch, row.TaggedValues{
 		0: types.Int(1),
 		1: types.Int(1),
 	})
 	require.NoError(t, err)
-	require.NoError(t, indexEditor.UpdateIndex(context.Background(), nil, dRow))
+	fullKey, partialKey, err := row.ReduceToIndexKeys(index, dRow)
+	require.NoError(t, err)
+	require.NoError(t, indexEditor.InsertRow(context.Background(), fullKey, partialKey))
 	dRow, err = row.New(format, indexSch, row.TaggedValues{
 		0: types.Int(2),
 		1: types.Int(1),
 	})
 	require.NoError(t, err)
-	require.NoError(t, indexEditor.UpdateIndex(context.Background(), nil, dRow))
-	err = indexEditor.Flush(context.Background())
-	require.Error(t, err)
-	err = indexEditor.Flush(context.Background())
+	fullKey, partialKey, err = row.ReduceToIndexKeys(index, dRow)
 	require.NoError(t, err)
+	require.Error(t, indexEditor.InsertRow(context.Background(), fullKey, partialKey))
+	dRow, err = row.New(format, indexSch, row.TaggedValues{
+		0: types.Int(2),
+		1: types.Int(2),
+	})
+	require.NoError(t, err)
+	fullKey, partialKey, err = row.ReduceToIndexKeys(index, dRow)
+	require.NoError(t, err)
+	require.NoError(t, indexEditor.InsertRow(context.Background(), fullKey, partialKey))
 }
 
 func TestIndexRebuildingWithZeroIndexes(t *testing.T) {
-	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_7_18, nil, nil)
+	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_Default, nil, nil)
 	tSchema := createTestSchema(t)
 	_, err := tSchema.Indexes().RemoveIndex(testSchemaIndexName)
 	require.NoError(t, err)
@@ -474,7 +420,7 @@ func TestIndexRebuildingWithZeroIndexes(t *testing.T) {
 }
 
 func TestIndexRebuildingWithOneIndex(t *testing.T) {
-	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_7_18, nil, nil)
+	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_Default, nil, nil)
 	tSchema := createTestSchema(t)
 	_, err := tSchema.Indexes().RemoveIndex(testSchemaIndexAge)
 	require.NoError(t, err)
@@ -493,7 +439,7 @@ func TestIndexRebuildingWithOneIndex(t *testing.T) {
 			require.True(t, ok)
 			indexKey[tag] = val
 		}
-		indexExpectedRows[i], err = row.New(types.Format_7_18, indexSch, indexKey)
+		indexExpectedRows[i], err = row.New(types.Format_Default, indexSch, indexKey)
 		require.NoError(t, err)
 	}
 
@@ -527,7 +473,7 @@ func TestIndexRebuildingWithOneIndex(t *testing.T) {
 }
 
 func TestIndexRebuildingWithTwoIndexes(t *testing.T) {
-	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_7_18, nil, nil)
+	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_Default, nil, nil)
 	tSchema := createTestSchema(t)
 
 	indexName := tSchema.Indexes().GetByName(testSchemaIndexName)
@@ -652,7 +598,7 @@ func TestIndexRebuildingWithTwoIndexes(t *testing.T) {
 }
 
 func TestIndexRebuildingUniqueSuccessOneCol(t *testing.T) {
-	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_7_18, nil, nil)
+	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_Default, nil, nil)
 	colColl := schema.NewColCollection(
 		schema.NewColumn("pk1", 1, types.IntKind, true, schema.NotNullConstraint{}),
 		schema.NewColumn("v1", 2, types.IntKind, false),
@@ -683,7 +629,7 @@ func TestIndexRebuildingUniqueSuccessOneCol(t *testing.T) {
 }
 
 func TestIndexRebuildingUniqueSuccessTwoCol(t *testing.T) {
-	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_7_18, nil, nil)
+	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_Default, nil, nil)
 	colColl := schema.NewColCollection(
 		schema.NewColumn("pk1", 1, types.IntKind, true, schema.NotNullConstraint{}),
 		schema.NewColumn("v1", 2, types.IntKind, false),
@@ -714,7 +660,7 @@ func TestIndexRebuildingUniqueSuccessTwoCol(t *testing.T) {
 }
 
 func TestIndexRebuildingUniqueFailOneCol(t *testing.T) {
-	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_7_18, nil, nil)
+	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_Default, nil, nil)
 	colColl := schema.NewColCollection(
 		schema.NewColumn("pk1", 1, types.IntKind, true, schema.NotNullConstraint{}),
 		schema.NewColumn("v1", 2, types.IntKind, false),
@@ -745,7 +691,7 @@ func TestIndexRebuildingUniqueFailOneCol(t *testing.T) {
 }
 
 func TestIndexRebuildingUniqueFailTwoCol(t *testing.T) {
-	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_7_18, nil, nil)
+	db, _ := dbfactory.MemFactory{}.CreateDB(context.Background(), types.Format_Default, nil, nil)
 	colColl := schema.NewColCollection(
 		schema.NewColumn("pk1", 1, types.IntKind, true, schema.NotNullConstraint{}),
 		schema.NewColumn("v1", 2, types.IntKind, false),
@@ -811,7 +757,7 @@ func createTestRowDataFromTaggedValues(t *testing.T, vrw types.ValueReadWriter, 
 	ed := m.Edit()
 
 	for i, val := range vals {
-		r, err := row.New(types.Format_7_18, sch, val)
+		r, err := row.New(types.Format_Default, sch, val)
 		require.NoError(t, err)
 		rows[i] = r
 		ed = ed.Set(r.NomsMapKey(sch), r.NomsMapValue(sch))
@@ -859,7 +805,7 @@ func rowsToIndexRows(t *testing.T, rows []row.Row, indexName schema.Index, index
 			require.True(t, ok)
 			indexNameKey[tag] = val
 		}
-		indexNameExpectedRows[i], err = row.New(types.Format_7_18, indexNameSch, indexNameKey)
+		indexNameExpectedRows[i], err = row.New(types.Format_Default, indexNameSch, indexNameKey)
 		require.NoError(t, err)
 
 		indexAgeKey := make(row.TaggedValues)
@@ -868,7 +814,7 @@ func rowsToIndexRows(t *testing.T, rows []row.Row, indexName schema.Index, index
 			require.True(t, ok)
 			indexAgeKey[tag] = val
 		}
-		indexAgeExpectedRows[i], err = row.New(types.Format_7_18, indexAgeSch, indexAgeKey)
+		indexAgeExpectedRows[i], err = row.New(types.Format_Default, indexAgeSch, indexAgeKey)
 		require.NoError(t, err)
 	}
 	return

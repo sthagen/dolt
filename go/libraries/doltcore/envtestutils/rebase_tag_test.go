@@ -78,7 +78,7 @@ func columnCollection(cols ...schema.Column) *schema.ColCollection {
 }
 
 func newRow(vals row.TaggedValues, cc *schema.ColCollection) row.Row {
-	r, err := row.New(types.Format_7_18, schema.MustSchemaFromCols(cc), vals)
+	r, err := row.New(types.Format_Default, schema.MustSchemaFromCols(cc), vals)
 	if err != nil {
 		panic(err)
 	}
@@ -535,12 +535,12 @@ func checkSchema(t *testing.T, r *doltdb.RootValue, tableName string, expectedSc
 
 func checkRows(t *testing.T, dEnv *env.DoltEnv, root *doltdb.RootValue, tableName string, sch schema.Schema, selectQuery string, expectedRows []row.Row) {
 	sqlDb := dsqle.NewDatabase("dolt", dEnv.DbData())
-	engine, sqlCtx, err := dsqle.NewTestEngine(context.Background(), sqlDb, root)
+	engine, sqlCtx, err := dsqle.NewTestEngine(t, dEnv, context.Background(), sqlDb, root)
 	require.NoError(t, err)
 
 	s, rowIter, err := engine.Query(sqlCtx, selectQuery)
 	require.NoError(t, err)
-	_, err = sqlutil.ToDoltSchema(context.Background(), root, tableName, s)
+	_, err = sqlutil.ToDoltSchema(context.Background(), root, tableName, s, nil)
 	require.NoError(t, err)
 
 	actualRows := []row.Row{}

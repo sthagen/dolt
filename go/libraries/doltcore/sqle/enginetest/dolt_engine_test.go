@@ -19,27 +19,12 @@ import (
 
 	"github.com/dolthub/go-mysql-server/enginetest"
 	"github.com/dolthub/go-mysql-server/sql"
-	"github.com/stretchr/testify/assert"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/sqle"
-	"github.com/dolthub/dolt/go/libraries/utils/set"
 )
 
 func init() {
 	sqle.MinRowsPerPartition = 2
-}
-
-func limitTestQueriesTo(queries ...string) {
-	querySet := set.NewStrSet(queries)
-
-	var broken []enginetest.QueryTest
-	for _, t := range enginetest.QueryTests {
-		if querySet.Contains(t.Query) {
-			broken = append(broken, t)
-		}
-	}
-
-	enginetest.QueryTests = broken
 }
 
 func TestQueries(t *testing.T) {
@@ -51,10 +36,19 @@ func TestSingleQuery(t *testing.T) {
 
 	var test enginetest.QueryTest
 	test = enginetest.QueryTest{
-		Query: "SELECT s, (select i from mytable mt where sub.i = mt.i) as subi FROM (select i,s,'hello' FROM mytable where s = 'first row') as sub;",
-		Expected: []sql.Row{
-			{"first row", int64(1)},
-		},
+		Query: `SELECT 
+					myTable.i, 
+					(SELECT 
+						dolt_commit_diff_mytable.diff_type 
+					FROM 
+						dolt_commit_diff_mytable
+					WHERE (
+						dolt_commit_diff_mytable.from_commit = 'abc' AND 
+						dolt_commit_diff_mytable.to_commit = 'abc' AND
+						dolt_commit_diff_mytable.to_i = myTable.i  -- extra filter clause
+					)) AS diff_type 
+				FROM myTable`,
+		Expected: []sql.Row{},
 	}
 
 	harness := newDoltHarness(t)
@@ -62,7 +56,41 @@ func TestSingleQuery(t *testing.T) {
 	engine.Analyzer.Debug = true
 	engine.Analyzer.Verbose = true
 
-	enginetest.TestQuery(t, harness, engine, test.Query, test.Expected, nil)
+	enginetest.TestQuery(t, harness, engine, test.Query, test.Expected, test.ExpectedColumns, test.Bindings)
+}
+
+// Convenience test for debugging a single query. Unskip and set to the desired query.
+func TestSingleScript(t *testing.T) {
+	t.Skip()
+
+	var scripts = []enginetest.ScriptTest{
+		{
+			// All DECLARE statements are only allowed under BEGIN/END blocks
+			Name: "Top-level DECLARE statements",
+			Assertions: []enginetest.ScriptTestAssertion{
+				{
+					Query:    "select 1+1",
+					Expected: []sql.Row{{2}},
+				},
+			},
+		},
+		{
+			Name: "last_insert_id() behavior",
+			SetUpScript: []string{
+				"create table a (x int primary key, y int)",
+			},
+			Assertions: []enginetest.ScriptTestAssertion{},
+		},
+	}
+
+	harness := newDoltHarness(t)
+	for _, test := range scripts {
+		engine := enginetest.NewEngine(t, harness)
+		engine.Analyzer.Debug = true
+		engine.Analyzer.Verbose = true
+
+		enginetest.TestScriptWithEngine(t, engine, harness, test)
+	}
 }
 
 func TestVersionedQueries(t *testing.T) {
@@ -72,53 +100,21 @@ func TestVersionedQueries(t *testing.T) {
 // Tests of choosing the correct execution plan independent of result correctness. Mostly useful for confirming that
 // the right indexes are being used for joining tables.
 func TestQueryPlans(t *testing.T) {
-	// TODO: Fix these. Most of them are broken because Dolt tables implement a slightly different set of interfaces
-	//  than the in-memory go-mysql-server tables, so they produce slightly different query plans. It's possible to
-	//  write a set of query plan tests that are robust in the face of these minor differences, but we haven't yet.
-	skipped := set.NewStrSet([]string{
-		"SELECT * FROM mytable mt INNER JOIN othertable ot ON mt.i = ot.i2 AND mt.i > 2",
-		"SELECT pk,i,f FROM one_pk LEFT JOIN niltable ON pk=i WHERE pk > 1",
-		"SELECT pk,i,f FROM one_pk LEFT JOIN niltable ON pk=i WHERE pk > 1 ORDER BY 1",
-		"SELECT pk,pk2 FROM one_pk t1, two_pk t2 WHERE pk=1 AND pk2=1 ORDER BY 1,2",
-		`SELECT i FROM mytable mt
-		WHERE (SELECT i FROM mytable where i = mt.i and i > 2) IS NOT NULL
-		AND (SELECT i2 FROM othertable where i2 = i) IS NOT NULL`,
-		"SELECT pk,pk2, (SELECT pk from one_pk where pk = 1 limit 1) FROM one_pk t1, two_pk t2 WHERE pk=1 AND pk2=1 ORDER BY 1,2",
+	// Dolt supports partial keys, so the index matched is different for some plans
+	// TODO: Fix these differences by implementing partial key matching in the memory tables, or the engine itself
+	skipped := []string{
 		"SELECT pk,pk1,pk2 FROM one_pk LEFT JOIN two_pk ON pk=pk1",
-		"SELECT pk,i,f FROM one_pk LEFT JOIN niltable ON pk=i AND f IS NOT NULL",
-		"SELECT pk,i,f FROM one_pk RIGHT JOIN niltable ON pk=i and pk > 0",
-		"SELECT a.pk1,a.pk2,b.pk1,b.pk2 FROM two_pk a, two_pk b WHERE a.pk1=b.pk1 AND a.pk2=b.pk2 ORDER BY 1,2,3",
-		"SELECT a.pk1,a.pk2,b.pk1,b.pk2 FROM two_pk a, two_pk b WHERE a.pk1=b.pk2 AND a.pk2=b.pk1 ORDER BY 1,2,3",
-		"SELECT opk.c5,pk1,pk2 FROM one_pk opk, two_pk tpk WHERE pk=pk1 ORDER BY 1,2,3",
-		"SELECT one_pk.c5,pk1,pk2 FROM one_pk,two_pk WHERE pk=pk1 ORDER BY 1,2,3",
-		"SELECT pk,i,f FROM one_pk RIGHT JOIN niltable ON pk=i and pk > 0 ORDER BY 2,3",
-		"SELECT pk,pk1,pk2 FROM one_pk JOIN two_pk ON pk1-pk>0 AND pk2<1",
-		"SELECT pk,pk1,pk2 FROM one_pk JOIN two_pk ORDER BY 1,2,3",
+		"SELECT pk,pk1,pk2 FROM one_pk JOIN two_pk ON pk=pk1",
+		"SELECT one_pk.c5,pk1,pk2 FROM one_pk JOIN two_pk ON pk=pk1 ORDER BY 1,2,3",
+		"SELECT opk.c5,pk1,pk2 FROM one_pk opk JOIN two_pk tpk ON opk.pk=tpk.pk1 ORDER BY 1,2,3",
+		"SELECT opk.c5,pk1,pk2 FROM one_pk opk JOIN two_pk tpk ON pk=pk1 ORDER BY 1,2,3",
 		"SELECT pk,pk1,pk2 FROM one_pk LEFT JOIN two_pk ON pk=pk1 ORDER BY 1,2,3",
-		"SELECT pk,pk1,pk2 FROM one_pk,two_pk WHERE one_pk.c1=two_pk.c1 ORDER BY 1,2,3",
-		"SELECT pk,pk1,pk2,one_pk.c1 AS foo, two_pk.c1 AS bar FROM one_pk JOIN two_pk ON one_pk.c1=two_pk.c1 ORDER BY 1,2,3",
-		"SELECT pk,pk1,pk2,one_pk.c1 AS foo,two_pk.c1 AS bar FROM one_pk JOIN two_pk ON one_pk.c1=two_pk.c1 WHERE one_pk.c1=10",
 		"SELECT pk,pk1,pk2 FROM one_pk t1, two_pk t2 WHERE pk=1 AND pk2=1 AND pk1=1 ORDER BY 1,2",
-		"SELECT /*+ JOIN_ORDER(t1, t2) */ t1.i FROM mytable t1 JOIN mytable t2 on t1.i = t2.i + 1 where t1.i = 2 and t2.i = 1",
-		`SELECT i FROM mytable mt
-		WHERE (SELECT i FROM mytable where i = mt.i) IS NOT NULL
-		AND (SELECT i2 FROM othertable where i2 = i and i > 2) IS NOT NULL`,
-		"SELECT mytable.i, mytable.s FROM mytable WHERE mytable.i = (SELECT i2 FROM othertable LIMIT 1)",
-		"SELECT mytable.i, mytable.s FROM mytable WHERE mytable.i IN (SELECT i2 FROM othertable)",
-		"SELECT mytable.i, mytable.s FROM mytable WHERE mytable.i IN (SELECT i2 FROM othertable WHERE mytable.i = othertable.i2)",
-	})
-
-	tests := make([]enginetest.QueryPlanTest, 0, len(enginetest.PlanTests))
-	for _, currTest := range enginetest.PlanTests {
-		if !skipped.Contains(currTest.Query) {
-			tests = append(tests, currTest)
-		}
 	}
-	enginetest.PlanTests = tests
 
 	// Parallelism introduces Exchange nodes into the query plans, so disable.
 	// TODO: exchange nodes should really only be part of the explain plan under certain debug settings
-	enginetest.TestQueryPlans(t, newDoltHarness(t).WithParallelism(1))
+	enginetest.TestQueryPlans(t, newDoltHarness(t).WithParallelism(1).WithSkippedQueries(skipped))
 }
 
 func TestQueryErrors(t *testing.T) {
@@ -130,7 +126,6 @@ func TestInfoSchema(t *testing.T) {
 }
 
 func TestColumnAliases(t *testing.T) {
-	assert.Equal(t, 1, 1, "msg", 1, 2)
 	enginetest.TestColumnAliases(t, newDoltHarness(t))
 }
 
@@ -144,6 +139,10 @@ func TestAmbiguousColumnResolution(t *testing.T) {
 
 func TestInsertInto(t *testing.T) {
 	enginetest.TestInsertInto(t, newDoltHarness(t))
+}
+
+func TestInsertIgnoreInto(t *testing.T) {
+	enginetest.TestInsertIgnoreInto(t, newDoltHarness(t))
 }
 
 func TestInsertIntoErrors(t *testing.T) {
@@ -179,8 +178,14 @@ func TestTruncate(t *testing.T) {
 	enginetest.TestTruncate(t, newDoltHarness(t))
 }
 
+func TestScripts(t *testing.T) {
+	skipped := []string{
+		"create index r_c0 on r (c0);",
+	}
+	enginetest.TestScripts(t, newDoltHarness(t).WithSkippedQueries(skipped))
+}
+
 func TestCreateTable(t *testing.T) {
-	t.Skipf("Skipping: no support for BLOB type")
 	enginetest.TestCreateTable(t, newDoltHarness(t))
 }
 
@@ -193,32 +198,47 @@ func TestRenameTable(t *testing.T) {
 }
 
 func TestRenameColumn(t *testing.T) {
-	t.Skipf("DDL tests break because of column comments")
 	enginetest.TestRenameColumn(t, newDoltHarness(t))
 }
 
 func TestAddColumn(t *testing.T) {
-	t.Skipf("DDL tests break because of column comments")
 	enginetest.TestAddColumn(t, newDoltHarness(t))
 }
 
 func TestModifyColumn(t *testing.T) {
-	t.Skip("Type changes aren't supported")
 	enginetest.TestModifyColumn(t, newDoltHarness(t))
 }
 
 func TestDropColumn(t *testing.T) {
-	t.Skipf("DDL tests break because of column comments")
 	enginetest.TestDropColumn(t, newDoltHarness(t))
 }
 
 func TestCreateForeignKeys(t *testing.T) {
-	t.Skipf("Unsupported")
 	enginetest.TestCreateForeignKeys(t, newDoltHarness(t))
 }
 
 func TestDropForeignKeys(t *testing.T) {
 	enginetest.TestDropForeignKeys(t, newDoltHarness(t))
+}
+
+func TestCreateCheckConstraints(t *testing.T) {
+	enginetest.TestCreateCheckConstraints(t, newDoltHarness(t))
+}
+
+func TestChecksOnInsert(t *testing.T) {
+	enginetest.TestChecksOnInsert(t, newDoltHarness(t))
+}
+
+func TestChecksOnUpdate(t *testing.T) {
+	enginetest.TestChecksOnUpdate(t, newDoltHarness(t))
+}
+
+func TestDisallowedCheckConstraints(t *testing.T) {
+	enginetest.TestDisallowedCheckConstraints(t, newDoltHarness(t))
+}
+
+func TestDropCheckConstraints(t *testing.T) {
+	enginetest.TestDropCheckConstraints(t, newDoltHarness(t))
 }
 
 func TestExplode(t *testing.T) {
@@ -247,11 +267,10 @@ func TestNaturalJoinEqual(t *testing.T) {
 }
 
 func TestNaturalJoinDisjoint(t *testing.T) {
-	enginetest.TestNaturalJoinDisjoint(t, newDoltHarness(t))
+	enginetest.TestNaturalJoinEqual(t, newDoltHarness(t))
 }
 
 func TestInnerNestedInNaturalJoins(t *testing.T) {
-	t.Skip("No primary key in test tables")
 	enginetest.TestInnerNestedInNaturalJoins(t, newDoltHarness(t))
 }
 
@@ -259,6 +278,132 @@ func TestColumnDefaults(t *testing.T) {
 	enginetest.TestColumnDefaults(t, newDoltHarness(t))
 }
 
+func TestVariables(t *testing.T) {
+	enginetest.TestVariables(t, newDoltHarness(t))
+}
+
+func TestVariableErrors(t *testing.T) {
+	enginetest.TestVariableErrors(t, newDoltHarness(t))
+}
+
+func TestJsonScripts(t *testing.T) {
+	enginetest.TestJsonScripts(t, newDoltHarness(t))
+}
+
 func TestTriggers(t *testing.T) {
 	enginetest.TestTriggers(t, newDoltHarness(t))
+}
+
+func TestStoredProcedures(t *testing.T) {
+	tests := make([]enginetest.ScriptTest, 0, len(enginetest.ProcedureLogicTests))
+	for _, test := range enginetest.ProcedureLogicTests {
+		//TODO: fix REPLACE always returning a successful deletion
+		if test.Name != "Parameters resolve inside of REPLACE" {
+			tests = append(tests, test)
+		}
+	}
+	enginetest.ProcedureLogicTests = tests
+
+	enginetest.TestStoredProcedures(t, newDoltHarness(t))
+}
+
+func TestTransactions(t *testing.T) {
+	enginetest.TestTransactionScripts(t, newDoltHarness(t))
+	for _, script := range DoltTransactionTests {
+		enginetest.TestTransactionScript(t, newDoltHarness(t), script)
+	}
+}
+
+// TestSingleTransactionScript is a convenience method for debugging a single transaction test. Unskip and set to the
+// desired test.
+func TestSingleTransactionScript(t *testing.T) {
+	//t.Skip()
+
+	script := enginetest.TransactionTest{
+		Name: "rollback",
+		SetUpScript: []string{
+			"create table t (x int primary key, y int)",
+			"insert into t values (1, 1)",
+		},
+		Assertions: []enginetest.ScriptTestAssertion{
+			{
+				Query:    "/* client a */ set autocommit = off",
+				Expected: []sql.Row{{}},
+			},
+			{
+				Query:    "/* client b */ set autocommit = off",
+				Expected: []sql.Row{{}},
+			},
+			{
+				Query:    "/* client a */ start transaction",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client b */ start transaction",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client a */ insert into t values (2, 2)",
+				Expected: []sql.Row{{sql.NewOkResult(1)}},
+			},
+			{
+				Query:    "/* client b */ insert into t values (3, 3)",
+				Expected: []sql.Row{{sql.NewOkResult(1)}},
+			},
+			{
+				Query:    "/* client a */ select * from t order by x",
+				Expected: []sql.Row{{1, 1}, {2, 2}},
+			},
+			{
+				Query:    "/* client b */ commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client a */ select * from t order by x",
+				Expected: []sql.Row{{1, 1}, {2, 2}},
+			},
+			{
+				Query:    "/* client a */ rollback",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client a */ select * from t order by x",
+				Expected: []sql.Row{{1, 1}, {3, 3}},
+			},
+			{
+				Query:    "/* client a */ insert into t values (2, 2)",
+				Expected: []sql.Row{{sql.NewOkResult(1)}},
+			},
+			{
+				Query:    "/* client b */ select * from t order by x",
+				Expected: []sql.Row{{1, 1}, {3, 3}},
+			},
+			{
+				Query:    "/* client a */ commit",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client b */ select * from t order by x",
+				Expected: []sql.Row{{1, 1}, {3, 3}},
+			},
+			{
+				Query:    "/* client b */ rollback",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "/* client b */ select * from t order by x",
+				Expected: []sql.Row{{1, 1}, {2, 2}, {3, 3}},
+			},
+		},
+	}
+
+	enginetest.TestTransactionScript(t, newDoltHarness(t), script)
+}
+
+func TestSystemTableQueries(t *testing.T) {
+	enginetest.RunQueryTests(t, newDoltHarness(t), BrokenSystemTableQueries)
+}
+
+func TestTestReadOnlyDatabases(t *testing.T) {
+	enginetest.TestReadOnlyDatabases(t, newDoltHarness(t))
 }

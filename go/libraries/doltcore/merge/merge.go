@@ -16,9 +16,12 @@ package merge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/dolthub/go-mysql-server/sql"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/diff"
@@ -26,6 +29,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"github.com/dolthub/dolt/go/libraries/doltcore/row"
 	"github.com/dolthub/dolt/go/libraries/doltcore/schema"
+	json2 "github.com/dolthub/dolt/go/libraries/doltcore/sqle/json"
 	"github.com/dolthub/dolt/go/libraries/doltcore/table/editor"
 	"github.com/dolthub/dolt/go/libraries/utils/valutil"
 	"github.com/dolthub/dolt/go/store/atomicerr"
@@ -143,6 +147,9 @@ func (merger *Merger) MergeTable(ctx context.Context, tblName string, sess *edit
 			ms := MergeStats{Operation: TableModified}
 			if h != mh {
 				ms, err = calcTableMergeStats(ctx, tbl, mergeTbl)
+				if err != nil {
+					return nil, nil, err
+				}
 			}
 			// force load the table editor since this counts as a change
 			_, err := sess.GetTableEditor(ctx, tblName, nil)
@@ -180,9 +187,31 @@ func (merger *Merger) MergeTable(ctx context.Context, tblName string, sess *edit
 		return nil, nil, err
 	}
 
+	// If any indexes were added during the merge, then we need to generate their row data to add to our updated table.
+	addedIndexesSet := make(map[string]string)
+	for _, index := range postMergeSchema.Indexes().AllIndexes() {
+		addedIndexesSet[strings.ToLower(index.Name())] = index.Name()
+	}
+	for _, index := range tblSchema.Indexes().AllIndexes() {
+		delete(addedIndexesSet, strings.ToLower(index.Name()))
+	}
+	for _, addedIndex := range addedIndexesSet {
+		newIndexData, err := editor.RebuildIndex(ctx, updatedTbl, addedIndex)
+		if err != nil {
+			return nil, nil, err
+		}
+		updatedTbl, err = updatedTbl.SetIndexRowData(ctx, addedIndex, newIndexData)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
 	err = sess.UpdateRoot(ctx, func(ctx context.Context, root *doltdb.RootValue) (*doltdb.RootValue, error) {
 		return root.PutTable(ctx, tblName, updatedTbl)
 	})
+	if err != nil {
+		return nil, nil, err
+	}
 
 	updatedTblEditor, err := sess.GetTableEditor(ctx, tblName, nil)
 	if err != nil {
@@ -459,14 +488,20 @@ func applyPkChange(ctx context.Context, sch schema.Schema, tableEditor editor.Ta
 			if err != nil {
 				return err
 			}
-			err = tableEditor.UpdateRow(ctx, oldRow, newRow)
+			err = tableEditor.UpdateRow(ctx, oldRow, newRow, handleTableEditorDuplicateErr)
 			if err != nil {
-				return err
+				err = applyPkChangeUnqErr(ctx, err, change.Key.(types.Tuple), change.NewValue.(types.Tuple), tableEditor)
+				if err != nil {
+					return err
+				}
 			}
 		} else {
-			err = tableEditor.InsertRow(ctx, newRow)
+			err = tableEditor.InsertRow(ctx, newRow, handleTableEditorDuplicateErr)
 			if err != nil {
-				return err
+				err = applyPkChangeUnqErr(ctx, err, change.Key.(types.Tuple), change.NewValue.(types.Tuple), tableEditor)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		stats.Adds++
@@ -479,9 +514,12 @@ func applyPkChange(ctx context.Context, sch schema.Schema, tableEditor editor.Ta
 		if err != nil {
 			return err
 		}
-		err = tableEditor.UpdateRow(ctx, oldRow, newRow)
+		err = tableEditor.UpdateRow(ctx, oldRow, newRow, handleTableEditorDuplicateErr)
 		if err != nil {
-			return err
+			err = applyPkChangeUnqErr(ctx, err, change.Key.(types.Tuple), change.NewValue.(types.Tuple), tableEditor)
+			if err != nil {
+				return err
+			}
 		}
 		stats.Modifications++
 	case types.DiffChangeRemoved:
@@ -499,6 +537,54 @@ func applyPkChange(ctx context.Context, sch schema.Schema, tableEditor editor.Ta
 	return nil
 }
 
+// applyPkChangeUnqErr handles unique key errors for the applyPkChange if an error is returned from a table editor.
+// If the given error is not a unique key error, then it is returned as-is. Otherwise, it is added to the constraint
+// violations map if applicable.
+func applyPkChangeUnqErr(ctx context.Context, err error, k, v types.Tuple, tableEditor editor.TableEditor) error {
+	if uke, ok := err.(uniqueKeyError); ok {
+		sch := tableEditor.Schema()
+		schCols := sch.GetAllCols()
+		idx := sch.Indexes().GetByName(uke.indexName)
+		idxTags := idx.IndexedColumnTags()
+		colNames := make([]string, len(idxTags))
+		for i, tag := range idxTags {
+			if col, ok := schCols.TagToCol[tag]; !ok {
+				return fmt.Errorf("unique key '%s' references tag '%d' on table '%s' but it cannot be found",
+					idx.Name(), tag, tableEditor.Name())
+			} else {
+				colNames[i] = col.Name
+			}
+		}
+		jsonStr := fmt.Sprintf(`{`+
+			`"Name":"%s",`+
+			`"Columns":["%s"]`+
+			`}`,
+			uke.indexName,
+			strings.Join(colNames, `','`))
+
+		var doc interface{}
+		if err := json.Unmarshal([]byte(jsonStr), &doc); err != nil {
+			return err
+		}
+		sqlDoc := sql.JSONDocument{Val: doc}
+		nomsJson, err := json2.NomsJSONFromJSONValue(ctx, tableEditor.ValueReadWriter(), sqlDoc)
+		if err != nil {
+			return err
+		}
+		cvKey, cvVal, err := toConstraintViolationRow(ctx, cvType_UniqueIndex, types.JSON(nomsJson), k, v)
+		if err != nil {
+			return err
+		}
+		err = tableEditor.SetConstraintViolation(ctx, cvKey, cvVal)
+		if err != nil {
+			return err
+		}
+	} else {
+		return err
+	}
+	return nil
+}
+
 func applyKeylessChange(ctx context.Context, sch schema.Schema, tableEditor editor.TableEditor, _ types.Map, stats *MergeStats, change types.ValueChanged) (err error) {
 	apply := func(ch types.ValueChanged) error {
 		switch ch.ChangeType {
@@ -507,7 +593,7 @@ func applyKeylessChange(ctx context.Context, sch schema.Schema, tableEditor edit
 			if err != nil {
 				return err
 			}
-			err = tableEditor.InsertRow(ctx, newRow)
+			err = tableEditor.InsertRow(ctx, newRow, nil)
 			if err != nil {
 				return err
 			}
@@ -521,7 +607,7 @@ func applyKeylessChange(ctx context.Context, sch schema.Schema, tableEditor edit
 			if err != nil {
 				return err
 			}
-			err = tableEditor.UpdateRow(ctx, oldRow, newRow)
+			err = tableEditor.UpdateRow(ctx, oldRow, newRow, nil)
 			if err != nil {
 				return err
 			}
@@ -542,6 +628,9 @@ func applyKeylessChange(ctx context.Context, sch schema.Schema, tableEditor edit
 
 	var card uint64
 	change, card, err = convertValueChanged(change)
+	if err != nil {
+		return err
+	}
 
 	for card > 0 {
 		if err = apply(change); err != nil {
@@ -722,25 +811,21 @@ func mergeAutoIncrementValues(ctx context.Context, tbl, otherTbl, resultTbl *dol
 
 func MergeCommits(ctx context.Context, commit, mergeCommit *doltdb.Commit) (*doltdb.RootValue, map[string]*MergeStats, error) {
 	ancCommit, err := doltdb.GetCommitAncestor(ctx, commit, mergeCommit)
-
 	if err != nil {
 		return nil, nil, err
 	}
 
 	ourRoot, err := commit.GetRootValue()
-
 	if err != nil {
 		return nil, nil, err
 	}
 
 	theirRoot, err := mergeCommit.GetRootValue()
-
 	if err != nil {
 		return nil, nil, err
 	}
 
 	ancRoot, err := ancCommit.GetRootValue()
-
 	if err != nil {
 		return nil, nil, err
 	}
@@ -763,7 +848,6 @@ func MergeRoots(ctx context.Context, ourRoot, theirRoot, ancRoot *doltdb.RootVal
 	tableEditSession := editor.CreateTableEditSession(ourRoot, editor.TableEditSessionProps{
 		ForeignKeyChecksDisabled: true,
 	})
-	var unconflicted []string
 	// need to validate merges can be done on all tables before starting the actual merges.
 	for _, tblName := range tblNames {
 		mergedTable, stats, err := merger.MergeTable(ctx, tblName, tableEditSession)
@@ -774,10 +858,6 @@ func MergeRoots(ctx context.Context, ourRoot, theirRoot, ancRoot *doltdb.RootVal
 
 		if mergedTable != nil {
 			tblToStats[tblName] = stats
-
-			if stats.Conflicts == 0 {
-				unconflicted = append(unconflicted, tblName)
-			}
 
 			err = tableEditSession.UpdateRoot(ctx, func(ctx context.Context, root *doltdb.RootValue) (*doltdb.RootValue, error) {
 				return root.PutTable(ctx, tblName, mergedTable)
@@ -796,6 +876,9 @@ func MergeRoots(ctx context.Context, ourRoot, theirRoot, ancRoot *doltdb.RootVal
 			err = tableEditSession.UpdateRoot(ctx, func(ctx context.Context, root *doltdb.RootValue) (*doltdb.RootValue, error) {
 				return root.RemoveTables(ctx, tblName)
 			})
+			if err != nil {
+				return nil, nil, err
+			}
 			newRoot, err = tableEditSession.Flush(ctx)
 			if err != nil {
 				return nil, nil, err
@@ -813,57 +896,90 @@ func MergeRoots(ctx context.Context, ourRoot, theirRoot, ancRoot *doltdb.RootVal
 		if len(conflicts) > 0 {
 			return nil, fmt.Errorf("foreign key conflicts")
 		}
-		return root.PutForeignKeyCollection(ctx, mergedFKColl)
-	})
 
-	err = tableEditSession.ValidateForeignKeys(ctx)
+		root, err = root.PutForeignKeyCollection(ctx, mergedFKColl)
+		if err != nil {
+			return nil, err
+		}
+
+		return root.UpdateSuperSchemasFromOther(ctx, tblNames, theirRoot)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
 
-	newRoot, err = newRoot.UpdateSuperSchemasFromOther(ctx, unconflicted, theirRoot)
+	newRoot, err = tableEditSession.Flush(ctx)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	newRoot, err = AddConstraintViolations(ctx, newRoot, ancRoot)
+	if err != nil {
+		return nil, nil, err
+	}
+	for tblName, stats := range tblToStats {
+		tbl, ok, err := newRoot.GetTable(ctx, tblName)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok {
+			cvMap, err := tbl.GetConstraintViolations(ctx)
+			if err != nil {
+				return nil, nil, err
+			}
+			stats.ConstraintViolations = int(cvMap.Len())
+		}
 	}
 
 	return newRoot, tblToStats, nil
 }
 
-func GetTablesInConflict(ctx context.Context, ddb *doltdb.DoltDB, rsr env.RepoStateReader) (workingInConflict, stagedInConflict, headInConflict []string, err error) {
-	var headRoot, stagedRoot, workingRoot *doltdb.RootValue
+// MayHaveConstraintViolations returns whether the given roots may have constraint violations. For example, a fast
+// forward merge that does not involve any tables with foreign key constraints or check constraints will not be able
+// to generate constraint violations. Unique key constraint violations would be caught during the generation of the
+// merged root, therefore it is not a factor for this function.
+func MayHaveConstraintViolations(ctx context.Context, ancestor, merged *doltdb.RootValue) (bool, error) {
+	ancTables, err := ancestor.MapTableHashes(ctx)
+	if err != nil {
+		return false, err
+	}
+	mergedTables, err := merged.MapTableHashes(ctx)
+	if err != nil {
+		return false, err
+	}
+	fkColl, err := merged.GetForeignKeyCollection(ctx)
+	if err != nil {
+		return false, err
+	}
+	tablesInFks := fkColl.Tables()
+	for tblName := range tablesInFks {
+		if ancHash, ok := ancTables[tblName]; !ok {
+			// If a table used in a foreign key is new then it's treated as a change
+			return true, nil
+		} else if mergedHash, ok := mergedTables[tblName]; !ok {
+			return false, fmt.Errorf("foreign key uses table '%s' but no hash can be found for this table", tblName)
+		} else if !ancHash.Equal(mergedHash) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
 
-	headRoot, err = env.HeadRoot(ctx, ddb, rsr)
-
+func GetTablesInConflict(ctx context.Context, roots doltdb.Roots) (
+	workingInConflict, stagedInConflict, headInConflict []string,
+	err error,
+) {
+	headInConflict, err = roots.Head.TablesInConflict(ctx)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	stagedRoot, err = env.StagedRoot(ctx, ddb, rsr)
-
+	stagedInConflict, err = roots.Staged.TablesInConflict(ctx)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	workingRoot, err = env.WorkingRoot(ctx, ddb, rsr)
-
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	headInConflict, err = headRoot.TablesInConflict(ctx)
-
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	stagedInConflict, err = stagedRoot.TablesInConflict(ctx)
-
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	workingInConflict, err = workingRoot.TablesInConflict(ctx)
-
+	workingInConflict, err = roots.Working.TablesInConflict(ctx)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -871,13 +987,30 @@ func GetTablesInConflict(ctx context.Context, ddb *doltdb.DoltDB, rsr env.RepoSt
 	return workingInConflict, stagedInConflict, headInConflict, err
 }
 
-func GetDocsInConflict(ctx context.Context, ddb *doltdb.DoltDB, rsr env.RepoStateReader, drw env.DocsReadWriter) (*diff.DocDiffs, error) {
-	docs, err := drw.GetDocsOnDisk()
+func GetTablesWithConstraintViolations(ctx context.Context, roots doltdb.Roots) (
+	workingViolations, stagedViolations, headViolations []string,
+	err error,
+) {
+	headViolations, err = roots.Head.TablesWithConstraintViolations(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
-	workingRoot, err := env.WorkingRoot(ctx, ddb, rsr)
+	stagedViolations, err = roots.Staged.TablesWithConstraintViolations(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	workingViolations, err = roots.Working.TablesWithConstraintViolations(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return workingViolations, stagedViolations, headViolations, err
+}
+
+func GetDocsInConflict(ctx context.Context, workingRoot *doltdb.RootValue, drw env.DocsReadWriter) (*diff.DocDiffs, error) {
+	docs, err := drw.GetDocsOnDisk()
 	if err != nil {
 		return nil, err
 	}
